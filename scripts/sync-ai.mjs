@@ -13,10 +13,12 @@ DO NOT EDIT.
 
 async function readMarkdownDirectory(directory) {
   const names = (await readdir(directory)).filter((name) => name.endsWith('.md')).sort();
-  return Promise.all(names.map(async (name) => ({
-    name: path.basename(name, '.md'),
-    content: (await readFile(path.join(directory, name), 'utf8')).trim(),
-  })));
+  return Promise.all(
+    names.map(async (name) => ({
+      name: path.basename(name, '.md'),
+      content: (await readFile(path.join(directory, name), 'utf8')).trim(),
+    })),
+  );
 }
 
 async function renderRootInstructions(runtime) {
@@ -44,11 +46,13 @@ async function generateRuntimeParityArtifacts() {
   await rm('.codex/hooks', { recursive: true, force: true });
   await mkdir('.codex/hooks', { recursive: true });
   const hookNames = (await readdir('.ai/hooks')).filter((name) => name.endsWith('.sh')).sort();
-  await Promise.all(hookNames.map(async (name) => {
-    const destination = path.join('.codex/hooks', name);
-    await cp(path.join('.ai/hooks', name), destination);
-    await chmod(destination, 0o755);
-  }));
+  await Promise.all(
+    hookNames.map(async (name) => {
+      const destination = path.join('.codex/hooks', name);
+      await cp(path.join('.ai/hooks', name), destination);
+      await chmod(destination, 0o755);
+    }),
+  );
   await writeFile(
     '.codex/README.md',
     `${generatedBanner('codex')}# Generated Codex artifacts\n\nHooks are copied from .ai/hooks/. Runtime hook activation depends on the Codex host supporting the corresponding hook configuration.\n`,
@@ -58,3 +62,18 @@ async function generateRuntimeParityArtifacts() {
 }
 
 await generateRuntimeParityArtifacts();
+
+execFileSync(
+  'pnpm',
+  [
+    'exec',
+    'prettier',
+    '--write',
+    'CLAUDE.md',
+    'AGENTS.md',
+    '.codex/AGENTS.md',
+    '.codex/README.md',
+    '.claude/settings.json',
+  ],
+  { stdio: 'inherit' },
+);

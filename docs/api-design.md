@@ -10,10 +10,10 @@ Retrieves comments for a published post.
 
 ### Query parameters
 
-| Parameter | Required | Description |
-| --- | --- | --- |
-| `limit` | No | Number of comments requested. Default and maximum are implementation-configured. |
-| `cursor` | No | Opaque cursor returned by a previous response. |
+| Parameter | Required | Description                                                                      |
+| --------- | -------- | -------------------------------------------------------------------------------- |
+| `limit`   | No       | Number of comments requested. Default and maximum are implementation-configured. |
+| `cursor`  | No       | Opaque cursor returned by a previous response.                                   |
 
 The post’s platform is resolved from the authenticated account and post record. Provider-specific IDs are not exposed as query parameters.
 
@@ -108,17 +108,17 @@ All errors use one stable envelope:
 
 Expected mappings include:
 
-| Status | Code examples | Meaning |
-| --- | --- | --- |
-| `400` | `INVALID_REQUEST`, `INVALID_CURSOR` | Request cannot be parsed or validated. |
-| `401` | `UNAUTHENTICATED` | Caller credentials are missing or invalid. |
-| `403` | `FORBIDDEN` | Caller cannot access the account or post. |
-| `404` | `POST_NOT_FOUND`, `COMMENT_NOT_FOUND` | Resource is not visible in the caller’s scope. |
-| `409` | `IDEMPOTENCY_CONFLICT` | Key was reused for a different request. |
-| `422` | `UNSUPPORTED_CAPABILITY` | Provider cannot perform the requested operation. |
-| `429` | `PROVIDER_RATE_LIMITED` | Provider or service rate limit was reached. |
-| `502` | `PROVIDER_ERROR` | Provider returned an upstream failure. |
-| `503` | `PROVIDER_UNAVAILABLE` | Provider is temporarily unavailable. |
+| Status | Code examples                         | Meaning                                          |
+| ------ | ------------------------------------- | ------------------------------------------------ |
+| `400`  | `INVALID_REQUEST`, `INVALID_CURSOR`   | Request cannot be parsed or validated.           |
+| `401`  | `UNAUTHENTICATED`                     | Caller credentials are missing or invalid.       |
+| `403`  | `FORBIDDEN`                           | Caller cannot access the account or post.        |
+| `404`  | `POST_NOT_FOUND`, `COMMENT_NOT_FOUND` | Resource is not visible in the caller’s scope.   |
+| `409`  | `IDEMPOTENCY_CONFLICT`                | Key was reused for a different request.          |
+| `422`  | `UNSUPPORTED_CAPABILITY`              | Provider cannot perform the requested operation. |
+| `429`  | `PROVIDER_RATE_LIMITED`               | Provider or service rate limit was reached.      |
+| `502`  | `PROVIDER_ERROR`                      | Provider returned an upstream failure.           |
+| `503`  | `PROVIDER_UNAVAILABLE`                | Provider is temporarily unavailable.             |
 
 ## Pagination strategy
 

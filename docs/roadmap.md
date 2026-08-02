@@ -19,6 +19,8 @@ The repository installs and passes typecheck, lint, formatting, and test command
 
 ## Milestone 2 — Domain model
 
+Status: Complete
+
 ### Goal
 
 Define stable comment, post, platform, pagination, and error contracts.
@@ -28,6 +30,8 @@ Define stable comment, post, platform, pagination, and error contracts.
 - Domain types and validation boundaries.
 - Typed application commands and results.
 - Error taxonomy and capability model.
+- Runtime validation for normalized comments, pagination, list queries, and reply commands.
+- Focused domain-model tests.
 
 ### Definition of done
 
