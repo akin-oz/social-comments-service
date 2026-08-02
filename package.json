@@ -1,8 +1,8 @@
 {
-  "name": "blotato-comments",
+  "name": "social-comments-service",
   "version": "0.1.0",
   "private": true,
-  "description": "Extensible comment service for a social media scheduling platform",
+  "description": "Provider-agnostic TypeScript service for retrieving and replying to comments across multiple social media platforms.",
   "packageManager": "pnpm@11.18.0",
   "engines": {
     "node": ">=22"
@@ -10,6 +10,8 @@
   "scripts": {
     "build": "tsc --noEmit",
     "dev": "tsx watch src/index.ts",
+    "ai:sync": "node scripts/sync-ai.mjs",
+    "ai:validate": "pnpm exec ai validate",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
@@ -22,6 +24,7 @@
     "fastify": "^5.0.0"
   },
   "devDependencies": {
+    "@akinlabs/ai-engineering": "github:akin-oz/ai-engineering#v0.1.2",
     "@types/node": "^22.0.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",

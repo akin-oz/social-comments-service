@@ -94,6 +94,19 @@ The detailed definition of done for each milestone is in [roadmap.md](docs/roadm
 
 AI assistance must remain subordinate to engineering judgment. Requirements, assumptions, design decisions, and verification should be reviewable by a human.
 
+## AI engineering governance
+
+The `.ai/` directory is the source of truth for agent rules, agents, hooks, and commands. Generated `CLAUDE.md`, `AGENTS.md`, `.claude/`, and `.codex/` outputs must not be edited directly.
+
+Agents may inspect the repository and draft proposals, but they must not change business logic, API/database/provider contracts, dependencies, or architecture without an applicable human-approved spec under `specs/`. Architectural changes also require an ADR under `docs/decisions/`. Proposed specs begin with `approved: no`; agents are not allowed to approve them.
+
+```bash
+  pnpm ai:sync      # compile .ai/ into complete Claude and Codex outputs
+pnpm ai:validate  # validate the .ai/ workspace
+```
+
+Commit hooks require a `Spec: NNN` or `ADR: NNNN` trailer and reject verification bypasses.
+
 ## Status
 
 Project initialization. Business logic is deliberately not implemented yet.

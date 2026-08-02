@@ -1,0 +1,18 @@
+schema: 1
+
+targets:
+  claude:
+    enabled: true
+
+  codex:
+    enabled: true
+
+agents:
+  - architecture-guardian
+  - contract-guardian
+  - spec-author
+
+rules:
+  - engineering
+  - spec-gated-execution
+  - source-of-truth
