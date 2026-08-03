@@ -1,6 +1,6 @@
 # Database design
 
-The database is intentionally not implemented in the initialization milestone. The following normalized model gives the future repository layer a concrete target while leaving the storage technology open.
+The repository boundary is implemented with a deterministic in-memory adapter for local tests, and the production target is PostgreSQL 16+ using `migrations/001_initial_schema.sql`. Application code remains independent of the database client.
 
 ## Design goals
 
@@ -101,3 +101,7 @@ erDiagram
 - Index comments by `(post_id, published_at, id)` for deterministic cursor queries.
 - Define deletion and retention behavior before production use.
 - Treat provider payloads and raw error details as sensitive operational data.
+
+## Tenant context and RLS
+
+The application must set the transaction-local `app.account_id` value from trusted authentication context before querying tenant-owned tables. PostgreSQL row-level security policies fail closed when this value is absent. Repository predicates remain mandatory defense in depth, and policy behavior must be verified with at least two tenant identities before production enablement.
