@@ -22,6 +22,7 @@ The post’s platform is resolved from the authenticated account and post record
 ```http
 GET /v2/posts/post_123/comments?limit=25 HTTP/1.1
 Authorization: Bearer <token>
+X-Account-Id: account_123
 ```
 
 ### Response: `200 OK`
@@ -64,6 +65,7 @@ Publishes a reply to an existing comment.
 ```http
 POST /v2/comments/comment_456/replies HTTP/1.1
 Authorization: Bearer <token>
+X-Account-Id: account_123
 Idempotency-Key: reply-request-01
 Content-Type: application/json
 
