@@ -41,3 +41,7 @@ Clients provide an idempotency key for reply creation. The eventual persistence 
 ## A-010: One service boundary is sufficient initially
 
 The first implementation is a modular monolith. Deployment separation is not justified by the assignment and would add operational complexity without improving the core design.
+
+## A-011: Tenant isolation is mandatory
+
+The existing account context represents a tenant boundary. A caller authenticated for one account must not read, mutate, or infer comments, posts, social accounts, or reply operations belonging to another account. The repository layer must enforce tenant scoping, with database-level row security considered as defense in depth when supported by the selected database.

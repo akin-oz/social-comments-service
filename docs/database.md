@@ -94,6 +94,8 @@ erDiagram
 
 ## Constraints to validate during implementation
 
+- Treat `account_id` as the tenant boundary for all account-owned entities and scope every query to it.
+- Prefer database row-level security when supported; policies must fail closed without trusted tenant context and be tested across at least two tenants.
 - Unique provider identity within a provider scope, such as `(social_account_id, external_comment_id)`.
 - Unique idempotency key within the authenticated account scope.
 - Index comments by `(post_id, published_at, id)` for deterministic cursor queries.
