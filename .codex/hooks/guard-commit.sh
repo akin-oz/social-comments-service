@@ -23,6 +23,9 @@ printf '%s' "$CMD" | grep -qE '(--no-verify|(^|[[:space:]])-n([[:space:]]|$))' \
 printf '%s' "$CMD" | grep -qE '(--amend.*--no-edit|--no-edit.*--amend|(^|[[:space:]])-C[[:space:]])' \
   && exit 0
 
+printf '%s' "$CMD" | grep -qE '(feat|fix|docs|refactor|test|build|ci|chore|perf|revert)(\([^)]*\))?!?:[[:space:]]' \
+  || deny "BLOCKED: commit message must use Conventional Commits, e.g. feat(comments): add domain validation."
+
 printf '%s' "$CMD" | grep -qE '(Spec:[[:space:]]*[0-9]{3}|ADR:[[:space:]]*[0-9]{4})' \
   || deny "BLOCKED: commit needs a Spec: NNN or ADR: NNNN trailer. If no approved spec covers the work, draft one first."
 exit 0

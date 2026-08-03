@@ -14,7 +14,7 @@
     "ai:validate": "pnpm exec ai validate",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 0",
     "start": "tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
