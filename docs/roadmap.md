@@ -39,6 +39,8 @@ Contracts are platform-neutral, documented, and covered by focused unit tests.
 
 ## Milestone 3 — Platform abstraction
 
+Status: Complete
+
 ### Goal
 
 Hide provider APIs behind explicit adapter interfaces.
@@ -54,6 +56,8 @@ Hide provider APIs behind explicit adapter interfaces.
 A provider can be added without changing route semantics, and unsupported operations are explicit.
 
 ## Milestone 4 — Repository layer
+
+Status: Complete
 
 ### Goal
 
@@ -71,6 +75,8 @@ Repository behavior is deterministic, transaction boundaries are documented, and
 
 ## Milestone 5 — REST API
 
+Status: Complete
+
 ### Goal
 
 Expose the documented read and write operations through Fastify.
@@ -86,6 +92,8 @@ Expose the documented read and write operations through Fastify.
 The API matches `api-design.md`, rejects invalid input, and does not leak provider-specific implementation details.
 
 ## Milestone 6 — Tests
+
+Status: Complete
 
 ### Goal
 
@@ -104,6 +112,8 @@ Critical paths and provider failure modes are covered, and the CI quality gate i
 
 ## Milestone 7 — Documentation
 
+Status: Complete
+
 ### Goal
 
 Keep design and operational knowledge usable for reviewers and maintainers.
@@ -120,6 +130,8 @@ Keep design and operational knowledge usable for reviewers and maintainers.
 A new engineer can run the service, understand its boundaries, and add a provider using the docs.
 
 ## Milestone 8 — Final polish
+
+Status: Complete
 
 ### Goal
 

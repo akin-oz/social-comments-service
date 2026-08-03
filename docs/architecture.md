@@ -20,7 +20,7 @@ flowchart LR
   Providers --> External[Social platform APIs]
 ```
 
-The diagram describes boundaries, not an implementation commitment. At this stage only the contracts and placeholders exist.
+The diagram describes the implemented boundaries. The default composition uses deterministic in-memory adapters for local execution; production composition can replace them with PostgreSQL and selected provider adapters.
 
 ## Dependency direction
 
@@ -36,7 +36,7 @@ Dependencies point toward stable contracts. Fastify, a database client, and prov
 
 The application should select a provider through a registry keyed by platform. Each adapter translates provider-specific identifiers, pagination, errors, timestamps, and capabilities into the service contract. Provider-specific features should be exposed deliberately rather than by weakening the common interface.
 
-The first implementation should establish a capability matrix before adding adapters. A provider that cannot support a requested operation should return a typed, actionable unsupported-capability error.
+The capability matrix is maintained in [provider-capability-matrix.md](provider-capability-matrix.md). The adaptive adapter translates provider identifiers, cursors, timestamps, and failures. A provider that cannot support a requested operation returns a typed, actionable unsupported-capability error.
 
 ## Future extensibility
 

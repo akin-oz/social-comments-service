@@ -2,7 +2,7 @@
 
 An extensible comment service for a social media scheduling platform.
 
-This repository is the starting point for the Blotato Senior Software Engineer take-home assignment. It is intentionally architecture-first: the initial commit documents the problem, boundaries, assumptions, and implementation path before business logic is introduced.
+This repository contains a production-oriented partial implementation of the Blotato Senior Software Engineer take-home assignment. It remains architecture-first: contracts, assumptions, decisions, and implementation boundaries are explicit and tested.
 
 ## Project overview
 
@@ -16,7 +16,7 @@ This is not intended to be a CRUD wrapper. The design treats external platforms 
 - Reply to an existing comment.
 - Support multiple current and future social platforms.
 - Expose the capabilities through a versioned REST API.
-- Define the database model and implementation roadmap without introducing database code yet.
+- Define the database model and implement a PostgreSQL migration boundary without coupling the application to a database client.
 
 ## Architecture philosophy
 
@@ -53,7 +53,7 @@ See [architecture](docs/architecture.md), [assumptions](docs/assumptions.md), an
 └── .github/
 ```
 
-The source tree contains contracts and placeholders only at this stage. It does not contain business logic or a database implementation.
+The source tree contains domain contracts, application use cases, the adaptive provider boundary, deterministic in-memory adapters, Fastify routes, tests, and PostgreSQL migration artifacts. No live social provider SDK is selected.
 
 ## Development workflow
 
@@ -109,4 +109,4 @@ Commit hooks require a `Spec: NNN` or `ADR: NNNN` trailer and reject verificatio
 
 ## Status
 
-Project initialization. Business logic is deliberately not implemented yet.
+Approved domain, platform, repository, API, testing, documentation, and production-polish specs are implemented to the extent supported without selecting a live provider or deployment vendor.
