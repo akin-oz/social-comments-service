@@ -8,14 +8,14 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc --noEmit",
+    "build": "tsc",
     "dev": "tsx watch src/index.ts",
     "ai:sync": "node scripts/sync-ai.mjs",
     "ai:validate": "pnpm exec ai validate",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings 0",
-    "start": "tsx src/index.ts",
+    "start": "node dist/src/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

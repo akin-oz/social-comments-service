@@ -17,9 +17,8 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      # The initialization commit intentionally does not include a generated lockfile.
-      # Tighten this to --frozen-lockfile after dependency installation is completed.
-      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm ai:validate
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm format:check
