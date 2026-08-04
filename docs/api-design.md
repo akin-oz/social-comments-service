@@ -139,7 +139,6 @@ Expected mappings include:
 | ------ | ------------------------------------- | ------------------------------------------------ |
 | `400`  | `INVALID_REQUEST`, `INVALID_CURSOR`   | Request cannot be parsed or validated.           |
 | `401`  | `UNAUTHENTICATED`                     | Caller credentials are missing or invalid.       |
-| `403`  | `FORBIDDEN`                           | Caller cannot access the account or post.        |
 | `404`  | `POST_NOT_FOUND`, `COMMENT_NOT_FOUND` | Resource is not visible in the caller’s scope.   |
 | `409`  | `IDEMPOTENCY_CONFLICT`                | The idempotency key cannot be honoured.          |
 | `422`  | `UNSUPPORTED_CAPABILITY`              | Provider cannot perform the requested operation. |
@@ -149,6 +148,8 @@ Expected mappings include:
 | `500`  | `INTERNAL_ERROR`                      | Unexpected failure inside the service.           |
 
 A `429` response carries `Retry-After` whenever the provider supplied that guidance.
+
+A resource belonging to another tenant is `404`, not `403`: the caller is not told that something exists which they may not see.
 
 `IDEMPOTENCY_CONFLICT` covers three cases, distinguished by the message: the key was reused for a different request body, a reply for the key is still in flight, or the key already failed. A failed key is terminal, because the outcome at the provider may be unknown; the client retries with a new key.
 

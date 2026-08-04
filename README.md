@@ -18,6 +18,17 @@ This is not intended to be a CRUD wrapper. The design treats external platforms 
 - Expose the capabilities through a versioned REST API.
 - Define the database model and implement a PostgreSQL migration boundary without coupling the application to a database client.
 
+### What the brief asked for, and where it is
+
+| Asked for                      | Where                                                                                                           |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Database schema                | [docs/database.md](docs/database.md) for the model, [migrations/](migrations/) for the SQL                      |
+| API design                     | [docs/api-design.md](docs/api-design.md), with [docs/openapi.json](docs/openapi.json) generated from the routes |
+| Relevant TypeScript code       | [src/](src/) — start at [comment-service.ts](src/comments/comment-service.ts), the two operations in one file   |
+| Explanation of major decisions | [Design decisions](#design-decisions) below, seven of them with their costs                                     |
+| Documented assumptions         | [docs/assumptions.md](docs/assumptions.md), eleven numbered and referenced from the code                        |
+| How AI tools were used         | [AI usage disclosure](#ai-usage-disclosure) below                                                               |
+
 ## Design decisions
 
 Seven decisions shaped this service. Each is stated with what it cost, because a decision without a cost is usually a decision that was never made. The linked ADR or specification carries the full argument, including the alternatives that were rejected.
@@ -147,19 +158,19 @@ An agent may read anything, explain anything, and draft a proposal. It may not c
 
 The most recent milestone is a worked example. An assistant reviewed the codebase and reported that retrieving comments returned an empty list for every post because nothing ever populated the local snapshot, that comment identifiers could not be persisted at all because the adapter produced `platform:externalId` strings for `uuid` columns, and that the cursor implementation contradicted documented assumption A-008. It wrote those findings up as [specs 008 to 010](specs/) and [ADR-0010](docs/decisions/0010-identifier-mapping.md), all marked `approved: no`, and stopped. Nothing was implemented until those files were approved by hand.
 
-Two of the approved decisions turned out to be partly wrong once implemented. Spec-008 required fetching an uncached comment from its provider, which is impossible under ADR-0010's opaque derived identifiers because such an identifier carries no provider coordinates. ADR-0010 specified a `findByExternalId` repository method that no caller needed. Both are recorded as implementation outcomes in the documents themselves rather than quietly skipped, because a specification that silently diverges from the code is worse than no specification.
+Several approved decisions turned out to be partly wrong once implemented. Spec-008 required fetching an uncached comment from its provider, which is impossible under ADR-0010's opaque derived identifiers because such an identifier carries no provider coordinates. ADR-0010 specified a `findByExternalId` method no caller needed, and claimed an identifier-uniqueness property that only one of five vendors documents. ADR-0012 overstated what `FORCE ROW LEVEL SECURITY` protects against. Three documents now carry an implementation-outcome section recording the correction rather than quietly diverging, because a specification that contradicts the code is worse than no specification.
 
 ### What the gate does not do
 
 It does not make the output correct. All three defects above survived every milestone up to the one that fixed them, including the milestones nominally covering tests and production polish, and none was caught by the quality gate: the suite was green throughout, because the tests exercised the same mistaken assumptions the code did. They were found by reading the code against its own documentation. What the gate buys is narrower and still worth having, that decisions are written down before code is written against them, that divergence between decision and implementation is visible, and that every claim in this section can be checked against `specs/`, `docs/decisions/`, and the commit history.
 
-Known limits are stated rather than smoothed over: the PostgreSQL adapter in [postgres.ts](src/repositories/postgres.ts) is reviewed but unverified, since no harness executes it, and [docs/roadmap.md](docs/roadmap.md) tracks that alongside the rest of the outstanding work.
+Known limits are stated rather than smoothed over, and [docs/roadmap.md](docs/roadmap.md) and [docs/tasks.md](docs/tasks.md) track the outstanding work — including the findings from this repository's own readiness review, which are recorded whether or not they have been fixed.
 
 ### AI Engineering OS
 
 The governance above is not hand-maintained per assistant. It is compiled by [AI Engineering OS](https://github.com/akin-oz/ai-engineering) (`@akinlabs/ai-engineering`), a separate open-source project of mine that exists because every assistant wants its instructions in a different place and format. Copying a few rules into `CLAUDE.md` and `AGENTS.md` is fine until the rules grow or a second assistant appears, at which point the copies drift and a reviewer has to check the same policy in several files.
 
-Instead, project intent lives once in [.ai/](.ai/) as a manifest, rules, agents, hooks, and commands, and the compiler generates the runtime artifacts for each target. This repository declares three rules, three agents, and both the Claude and Codex targets; `CLAUDE.md`, `AGENTS.md`, `.claude/`, and `.codex/` are all generated from that source and are never edited by hand.
+Instead, project intent lives once in [.ai/](.ai/) as a manifest, rules, agents, hooks, and commands, and the compiler generates the runtime artifacts for each target. This repository declares three rules, thirteen agents, two read-only review teams, and both the Claude and Codex targets; `CLAUDE.md`, `AGENTS.md`, `.claude/`, and `.codex/` are all generated from that source and are never edited by hand.
 
 ```bash
 pnpm ai:sync      # compile .ai/ into the Claude and Codex runtime artifacts
@@ -170,6 +181,8 @@ CI runs `pnpm ai:validate` alongside typecheck, lint, formatting, and tests, so 
 
 ## Status
 
-All ten approved specifications are implemented. Retrieving comments for a published post and replying to a comment both work end to end against a provider, demonstrable with the commands above.
+All thirteen approved specifications are implemented. Retrieving comments for a published post and replying to a comment both work end to end, on PostgreSQL and on in-memory adapters, demonstrable with the commands above.
 
-Two things are deliberately not done. No live provider SDK is selected, so the runnable adapter is a deterministic fixture and the [capability matrix](docs/provider-capability-matrix.md) records no real platform research yet. The PostgreSQL adapter is written against the approved schema but no harness executes it, so it is a reviewed design rather than working code; the in-memory adapter is the only proven persistence path. [docs/roadmap.md](docs/roadmap.md) tracks both.
+The PostgreSQL adapter is exercised against a real database. Tenant isolation is proven by a test that removes the repository's own `account_id` predicate and confirms another tenant's rows stay invisible, and CI runs that suite against a PostgreSQL service container.
+
+One thing is deliberately not done: no live provider SDK is selected, so the runnable adapter is a deterministic fixture. The [capability matrix](docs/provider-capability-matrix.md) records what the five real platforms document, from vendor documentation rather than integration testing. [docs/roadmap.md](docs/roadmap.md) tracks what remains.

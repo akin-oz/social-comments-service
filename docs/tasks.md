@@ -80,6 +80,38 @@ Reading the vendor documentation surfaced three items that need a decision befor
 - [ ] **Assumption A-005 does not hold for X.** Replies are one level deep on Instagram and YouTube, two on LinkedIn, and arbitrarily deep on X, which has no comment object at all. Normalising X to one level is defensible but lossy, and the assumption does not currently say so.
 - [ ] **Spec-013 persists provider cursors, which Meta documents against.** Facebook and Instagram both state that cursors must not be stored, because they are invalidated when the item they point at is deleted. A stored continuation is therefore best-effort and an adapter must tolerate its rejection, most likely by restarting the stream.
 
+## Raised by the delivery-readiness review
+
+The repository's own read-only review board swept it before submission. Documentation findings are fixed; the rest are recorded here because they touch code, tests, or migrations and so need a specification under this repository's gate.
+
+The review's method is worth stating: it re-applied real historical defects and confirmed the suite stayed green. That is evidence, not opinion.
+
+### Test gaps — the suite would not catch these regressions
+
+- [ ] **The row-cast defect ships green.** Re-applying the exact bug that `src/repositories/postgres.ts` documents as fixed leaves all tests passing. The integration test reads back only `claimed` and `operation.id`; `requestFingerprint`, `completedAt`, and six other mapped fields are never asserted.
+- [ ] **Nothing runs `CommentService` against PostgreSQL.** The integration suite drives the three repositories directly, so the wired composition — fingerprint comparison, cursor round-trip, error mapping over real rows — has never executed against a real database. One `app.inject` test through `createPostgresApplication` covering list, reply, same-key retry, and conflicting-key 409 would have caught all three historical defects.
+- [ ] **Six surviving mutations in tenant and correctness paths**: no HTTP-level cross-tenant test (the demo composition has one tenant, so the case is inexpressible); `p.status = 'published'` is mutable to `is not null`; the upsert's `do update set` clause can be gutted; the parent-derivation branch is untested and is the one path that could leak a raw provider identifier; `requireCapability(provider, 'list_comments')` is deletable; platform predicates are neutralizable because every fixture is `instagram`.
+- [ ] **Weak assertions**: the production retry branch never runs; the Spec-013 hydration trigger is mutable to the exact form the code comment explains is wrong; `internalCommentId` has no golden vector, so tests compute expectations with the function under test; `Retry-After` is never asserted; `passWithNoTests: true` with no coverage gate means a broken glob yields a green build with zero tests.
+
+### Correctness and security
+
+- [ ] **Cursor forgery: `INVALID_CURSOR` does not do what the contract promises.** `docs/api-design.md` says a cursor the service did not issue is rejected; the codec accepts any well-formed base64 JSON, and the decoded keyset reaches PostgreSQL as unvalidated `::timestamptz`/`::uuid` casts, producing a 500 and an error-level log per request. No cross-tenant read is possible — the predicate and RLS both hold. Relatedly, the provider-cursor field in the client cursor is now write-only, since the service reads persisted snapshot state instead, so it leaks upstream tokens for no benefit. Dropping that field and validating the cursor fixes both.
+- [ ] **The `comments_app` role's attributes are never pinned.** Migration 002 skips role creation if the name already exists, so a pre-existing `comments_app` holding `SUPERUSER` or `BYPASSRLS` silently defeats every policy. An unconditional `alter role … nosuperuser nobypassrls` plus a `pg_roles` assertion in the integration test closes it.
+- [ ] **Production fails open to the in-memory demo.** A missing or misspelled `DATABASE_URL` under `NODE_ENV=production` starts the demo composition, passes `/health`, and honours any `X-Account-Id` with no row-level security behind it. It should refuse to start.
+- [ ] **No UUID validation on `X-Account-Id` or path parameters**, so a malformed identifier yields 500 where the contract says 404.
+- [ ] **The unhandled-error log records an unprojected error object**, so a `pg` `DatabaseError` can carry `detail`, `internalQuery`, and constraint values into logs — the one exception to the otherwise-enforced rule that content never reaches a log record.
+- [ ] **`accounts` has no row-level security** while `comments_app` holds `select` on it. No live query touches it, but the defence-in-depth story stops one table short.
+- [ ] **The migration runner silently no-ops without `APP_DATABASE_PASSWORD`**, leaving a passwordless `LOGIN` role; it should refuse like it does for a missing `DATABASE_URL`.
+- [ ] **The in-memory adapter scopes tenants by string-prefix match**, which is presented as a first-class alternative with no database policy behind it.
+
+### Smaller
+
+- [ ] The Docker image ships compiled tests, because `tsconfig.json` includes `tests/` in the build output.
+- [ ] The reply `curl` in the README 404s if run standalone; the list request must run first in the same session to populate the snapshot.
+- [ ] `request_fingerprint` stores the reply body in plain text; hashing it would serve the same purpose.
+- [ ] `src/api/schemas.ts` contradicts itself on whether provider identifiers are exposed.
+- [ ] `@akinlabs/ai-engineering` is pinned to a mutable git tag.
+
 ## Known defects
 
 - [x] **A fresh first-page request under-reported `hasMore` after a partial hydration.** A caller that restarted pagination was told a post held fewer comments than it did, because hydration fired only on an empty page and `hasMore` was derived from whatever cursor the caller happened to supply. Fixed under Spec-013: a post now records how much of its provider stream has been read, hydration fires on an incomplete page while the stream is not exhausted, and `hasMore` comes from snapshot completeness. Verified against PostgreSQL, and the regression tests fail against the previous logic.
