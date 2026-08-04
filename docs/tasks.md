@@ -72,6 +72,14 @@ This is the implementation backlog for the assignment. The roadmap explains mile
 
 The PostgreSQL repository is now exercised against a real database. Running it surfaced three defects that had been invisible: `posts` has no `platform` column so every comment query referenced a column that does not exist, reply-operation rows were cast rather than mapped so every snake_case field read as `undefined` and broke idempotent retries, and neither the Docker build nor `docker compose` had ever succeeded.
 
+## Raised by provider research
+
+Reading the vendor documentation surfaced three items that need a decision before a live adapter is written. Each changes an approved document, so each needs an ADR or spec rather than a quiet edit.
+
+- [ ] **Comment identity may need the social account folded in (ADR-0010).** Only X documents globally unique comment identifiers; the other four vendors either do not state a uniqueness scope or, in LinkedIn's case, warn that the returned URN is unreliable. The database constraint is already per social account, so only the derived UUID carries the weaker assumption.
+- [ ] **Assumption A-005 does not hold for X.** Replies are one level deep on Instagram and YouTube, two on LinkedIn, and arbitrarily deep on X, which has no comment object at all. Normalising X to one level is defensible but lossy, and the assumption does not currently say so.
+- [ ] **Spec-013 persists provider cursors, which Meta documents against.** Facebook and Instagram both state that cursors must not be stored, because they are invalidated when the item they point at is deleted. A stored continuation is therefore best-effort and an adapter must tolerate its rejection, most likely by restarting the stream.
+
 ## Known defects
 
 - [x] **A fresh first-page request under-reported `hasMore` after a partial hydration.** A caller that restarted pagination was told a post held fewer comments than it did, because hydration fired only on an empty page and `hasMore` was derived from whatever cursor the caller happened to supply. Fixed under Spec-013: a post now records how much of its provider stream has been read, hydration fires on an incomplete page while the stream is not exhausted, and `hasMore` comes from snapshot completeness. Verified against PostgreSQL, and the regression tests fail against the previous logic.
@@ -82,7 +90,7 @@ The PostgreSQL repository is now exercised against a real database. Running it s
 
 - [x] Replace README AI usage placeholder with honest account of tool contributions and review process.
 - [x] Add a "Design decisions" section to the README: seven decisions with their costs, what was deliberately not built, and links to the governing ADRs and specs.
-- [ ] Research and populate provider capability matrix (YouTube, Facebook Graph, LinkedIn, Instagram, X) with real API capability findings.
+- [x] Research and populate the provider capability matrix from official vendor documentation for YouTube, Facebook, Instagram, LinkedIn, and X, with citations.
 - [x] Verify api-design.md alignment: limit defaults (25), max (100), header-only auth, error code mappings (500 → INTERNAL_ERROR).
 
 ### OpenAPI and contracts

@@ -187,13 +187,13 @@ Make the repository answer the assignment brief directly, for a reviewer reading
 
 ### Deliverables
 
-| Deliverable                                                            | State       | Blocks submission |
-| ---------------------------------------------------------------------- | ----------- | ----------------- |
-| Contract alignment: limits, header auth, `INTERNAL_ERROR`, cursor docs | Done        | —                 |
-| AI usage disclosure replacing the README placeholder                   | Done        | —                 |
-| "Design decisions" summary in the README linking to the ADRs           | Done        | —                 |
-| Provider capability matrix populated from public API research          | Not started | No                |
-| OpenAPI generated from the Fastify schemas                             | Done        | —                 |
+| Deliverable                                                            | State | Blocks submission |
+| ---------------------------------------------------------------------- | ----- | ----------------- |
+| Contract alignment: limits, header auth, `INTERNAL_ERROR`, cursor docs | Done  | —                 |
+| AI usage disclosure replacing the README placeholder                   | Done  | —                 |
+| "Design decisions" summary in the README linking to the ADRs           | Done  | —                 |
+| Provider capability matrix populated from public API research          | Done  | —                 |
+| OpenAPI generated from the Fastify schemas                             | Done  | —                 |
 
 ### Definition of done
 
@@ -207,4 +207,4 @@ Schema, API design, code, assumptions, and the AI disclosure are all present, an
 
 Nothing blocks submission. The README now states the seven decisions that shaped the service, what each cost, and what was deliberately left out, with links into the ADRs and specifications for depth.
 
-One improvement remains and is not a blocker: the capability matrix records no research into real platforms. The provider abstraction's justification is that platforms differ, and the matrix does not yet show where. It is the cheapest remaining way to ground that argument in evidence rather than assertion.
+The capability matrix is now grounded in vendor documentation for all five platforms, which both justifies the provider abstraction and raises three items recorded in `docs/tasks.md`: the identifier-uniqueness assumption in ADR-0010 is weaker than claimed, assumption A-005 does not hold for X, and Spec-013 stores provider cursors that Meta documents against. Each needs an ADR or spec before a live adapter is written; none blocks submission.
