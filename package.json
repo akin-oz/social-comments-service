@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch src/server.ts",
     "ai:sync": "node scripts/sync-ai.mjs",
     "ai:validate": "pnpm exec ai validate",
     "format": "prettier --write .",
