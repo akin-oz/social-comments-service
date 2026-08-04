@@ -9,13 +9,29 @@ const application = createDemoApplication();
 
 application
   .listen({ port, host })
-  .then(() => {
+  .then((address) => {
     application.log.info(
-      { accountId: demoAccountId, postId: demoPost.id },
-      'started with the fixture provider composition',
+      {
+        event: 'service.started',
+        address,
+        logLevel: process.env.LOG_LEVEL ?? 'info',
+        composition: 'demo',
+        provider: 'fixture',
+        persistence: 'in-memory',
+        accountId: demoAccountId,
+        postId: demoPost.id,
+      },
+      'service.started',
+    );
+    application.log.info(
+      {
+        event: 'service.demo_hint',
+        listComments: `curl '${address}/v2/posts/${demoPost.id}/comments?limit=2' -H 'X-Account-Id: ${demoAccountId}'`,
+      },
+      'service.demo_hint',
     );
   })
   .catch((error: unknown) => {
-    application.log.error(error, 'failed to start application');
+    application.log.error({ event: 'service.start_failed', err: error }, 'service.start_failed');
     process.exitCode = 1;
   });

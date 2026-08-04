@@ -15,8 +15,8 @@ import {
 import { ProviderRateLimitError, ServiceError } from '../../src/shared/errors.js';
 import { internalCommentId } from '../../src/shared/identity.js';
 import type { ProviderCapability } from '../../src/comments/contracts.js';
-import type { RetryPolicy } from '../../src/shared/observability.js';
-import { externalComment, post, tenant } from '../support/fixtures.js';
+import { noopMetrics, type RetryPolicy } from '../../src/shared/observability.js';
+import { externalComment, post, RecordingLogger, tenant } from '../support/fixtures.js';
 
 const immediatePolicy: RetryPolicy = {
   maxAttempts: 1,
@@ -76,13 +76,16 @@ function buildService(options: Harness = {}) {
   );
   const comments = new InMemoryCommentRepository([], tenant.accountId);
   const operations = new InMemoryReplyOperationRepository();
+  const logger = new RecordingLogger();
   const service = new CommentService(
     comments,
     new InMemoryPostRepository([post]),
     operations,
     new InMemoryPlatformProviderRegistry(new Map([[post.platform, provider]])),
+    noopMetrics,
+    logger,
   );
-  return { service, client, comments, operations };
+  return { service, client, comments, operations, logger };
 }
 
 describe('listing comments', () => {
@@ -266,5 +269,81 @@ describe('replying to a comment', () => {
 describe('service error contract', () => {
   it('uses the documented status codes', () => {
     expect(new ServiceError('INVALID_CURSOR', 'bad cursor', 400).statusCode).toBe(400);
+  });
+});
+
+describe('observability', () => {
+  it('distinguishes a provider fetch from a snapshot hit', async () => {
+    const { service, logger } = buildService();
+
+    await service.listComments(tenant, post.id, { limit: 25 });
+    await service.listComments(tenant, post.id, { limit: 25 });
+
+    expect(logger.events()).toContain('comments.list.hydrated');
+    expect(logger.events()).toContain('comments.list.served_from_cache');
+    expect(logger.find('provider.list.completed')?.fields).toMatchObject({
+      platform: post.platform,
+      fetched: 3,
+    });
+  });
+
+  it('correlates records to the request that caused them', async () => {
+    const { service, logger } = buildService();
+
+    await service.listComments(tenant, post.id, { limit: 25 });
+
+    for (const record of logger.records) {
+      expect(record.fields).toMatchObject({
+        requestId: tenant.requestId,
+        accountId: tenant.accountId,
+      });
+    }
+  });
+
+  it('records a published reply and its replay separately', async () => {
+    const { service, logger } = buildService();
+    await service.listComments(tenant, post.id, { limit: 25 });
+    const parentId = internalCommentId(post.platform, 'ig-comment-1');
+
+    await service.replyToComment(tenant, parentId, 'Thank you!', 'key-1');
+    await service.replyToComment(tenant, parentId, 'Thank you!', 'key-1');
+
+    expect(logger.events().filter((event) => event === 'comments.reply.published')).toHaveLength(1);
+    expect(logger.events()).toContain('comments.reply.replayed');
+  });
+
+  it('never writes comment bodies or author names into the log', async () => {
+    const { service, logger } = buildService();
+    await service.listComments(tenant, post.id, { limit: 25 });
+    const parentId = internalCommentId(post.platform, 'ig-comment-1');
+    await service.replyToComment(tenant, parentId, 'a secret reply body', 'key-1');
+
+    const serialized = JSON.stringify(logger.records);
+    expect(serialized).not.toContain('a secret reply body');
+    expect(serialized).not.toContain('Ada Lovelace');
+    expect(logger.find('comments.reply.published')?.fields).toMatchObject({ bodyLength: 19 });
+  });
+
+  it('reports a failure with its taxonomy code at warn, not error', async () => {
+    const { service, logger } = buildService({
+      client: {
+        listComments: async () => ({
+          items: [externalComment('ig-comment-1', '2026-08-01T10:00:00.000Z')],
+          nextCursor: null,
+          hasMore: false,
+        }),
+        replyToComment: async () => {
+          throw new ProviderRateLimitError('Too many requests.', 30_000);
+        },
+      },
+    });
+    await service.listComments(tenant, post.id, { limit: 25 });
+    const parentId = internalCommentId(post.platform, 'ig-comment-1');
+
+    await expect(service.replyToComment(tenant, parentId, 'hi', 'key-1')).rejects.toThrow();
+
+    const failure = logger.find('comments.reply.failed');
+    expect(failure?.level).toBe('warn');
+    expect(failure?.fields).toMatchObject({ code: 'PROVIDER_RATE_LIMITED' });
   });
 });

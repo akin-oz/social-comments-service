@@ -1,7 +1,14 @@
 import { ProviderError } from '../shared/errors.js';
 import { internalCommentId } from '../shared/identity.js';
 import { validateNormalizedComment } from '../shared/validation.js';
-import { callProvider, providerRetryPolicy, type RetryPolicy } from '../shared/observability.js';
+import {
+  callProvider,
+  noopLogger,
+  providerRetryPolicy,
+  type Logger,
+  type RetryPolicy,
+} from '../shared/observability.js';
+import { toFailureCode } from '../shared/errors.js';
 import type { Comment, NormalizedComment, Platform, PublishedPost } from '../shared/types.js';
 import type {
   AdaptiveProvider,
@@ -52,6 +59,7 @@ export class AdaptiveProviderAdapter implements AdaptiveProvider {
     private readonly client: ProviderClient,
     public readonly capabilities: ReadonlySet<ProviderCapability>,
     private readonly policy: RetryPolicy = providerRetryPolicy,
+    private readonly logger: Logger = noopLogger,
   ) {}
 
   public async listComments(query: ProviderListCommentsQuery): Promise<ProviderCommentPage> {
@@ -63,6 +71,7 @@ export class AdaptiveProviderAdapter implements AdaptiveProvider {
           limit: query.limit,
         }),
       this.policy,
+      (error, delayMs) => this.logRetry('list_comments', error, delayMs),
     );
     if (page.hasMore && page.nextCursor === null) {
       throw new ProviderError(
@@ -85,8 +94,24 @@ export class AdaptiveProviderAdapter implements AdaptiveProvider {
           body: command.body,
         }),
       this.policy,
+      (error, delayMs) => this.logRetry('reply_to_comment', error, delayMs),
     );
     return this.toNormalized(item, command.post, command.parentExternalCommentId);
+  }
+
+  /**
+   * Retries are the one provider detail the application layer cannot see, since
+   * they happen inside a single call. Records carry no request identifier
+   * because the adapter outlives any one request; correlate by platform and
+   * time against the `provider.*` record the service emits.
+   */
+  private logRetry(operation: ProviderCapability, error: unknown, delayMs: number): void {
+    this.logger.warn('provider.call.retried', {
+      platform: this.platform,
+      operation,
+      code: toFailureCode(error),
+      delayMs,
+    });
   }
 
   private toNormalized(

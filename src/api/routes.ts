@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { DomainValidationError } from '../shared/validation.js';
 import { ProviderRateLimitError, ServiceError } from '../shared/errors.js';
 import type { CommentService } from '../comments/comment-service.js';
-import type { Comment, TenantContext } from '../shared/types.js';
+import type { Comment, RequestContext } from '../shared/types.js';
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
@@ -26,7 +26,7 @@ interface ReplyBody {
 }
 
 interface RequestWithContext extends FastifyRequest {
-  requestContext: TenantContext;
+  requestContext: RequestContext;
 }
 
 /** Explicit projection so internal fields can never reach an API client. */
@@ -52,11 +52,15 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
     if (request.url === '/health') return;
     const accountId = request.headers['x-account-id'];
     if (typeof accountId !== 'string' || accountId.trim() === '') {
+      request.log.warn(
+        { event: 'http.request.rejected', code: 'UNAUTHENTICATED', statusCode: 401 },
+        'request rejected',
+      );
       return reply
         .code(401)
         .send(errorResponse('UNAUTHENTICATED', 'Authentication is required.', request.id));
     }
-    (request as RequestWithContext).requestContext = { accountId };
+    (request as RequestWithContext).requestContext = { accountId, requestId: request.id };
   });
 
   app.get<{ Params: ListParams; Querystring: ListQuery }>(
@@ -128,24 +132,41 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
 
   app.setErrorHandler((error, request, reply) => {
     if ((error as { validation?: unknown }).validation) {
+      logRejection(request, 'INVALID_REQUEST', 400);
       return reply
         .code(400)
         .send(errorResponse('INVALID_REQUEST', 'The request is invalid.', request.id));
     }
     if (error instanceof DomainValidationError) {
+      logRejection(request, 'INVALID_REQUEST', 400);
       return reply.code(400).send(errorResponse('INVALID_REQUEST', error.message, request.id));
     }
     if (error instanceof ServiceError) {
       applyRetryAfter(reply, error);
+      logRejection(request, error.code, error.statusCode);
       return reply
         .code(error.statusCode)
         .send(errorResponse(error.code, error.message, request.id));
     }
-    request.log.error({ err: error }, 'unhandled request error');
+    request.log.error(
+      { event: 'http.request.failed', err: error, statusCode: 500 },
+      'unhandled request error',
+    );
     return reply
       .code(500)
       .send(errorResponse('INTERNAL_ERROR', 'The request could not be completed.', request.id));
   });
+}
+
+/**
+ * Records why a request was refused. Client mistakes are not errors, so they
+ * are logged at warn and above only when the service itself is at fault
+ * (ADR-0011).
+ */
+function logRejection(request: FastifyRequest, code: string, statusCode: number): void {
+  const fields = { event: 'http.request.rejected', code, statusCode };
+  if (statusCode >= 500) request.log.error(fields, 'request failed');
+  else request.log.warn(fields, 'request rejected');
 }
 
 function applyRetryAfter(reply: FastifyReply, error: ServiceError): void {

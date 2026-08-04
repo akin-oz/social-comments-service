@@ -10,6 +10,45 @@ export const noopMetrics: Metrics = {
   observe: () => undefined,
 };
 
+export type LogFields = Readonly<Record<string, unknown>>;
+
+/**
+ * Logging port (ADR-0011). Application and platform code depend on this rather
+ * than on a logging library, so the domain stays free of infrastructure and the
+ * backend remains replaceable.
+ *
+ * `event` is a stable `noun.verb` identifier that consumers match on; the
+ * wording of any human-readable message is never part of the contract. Callers
+ * must not pass comment bodies, author display names, or credentials in
+ * `fields` — log a measurement such as a length or a count instead.
+ */
+export interface Logger {
+  debug(event: string, fields?: LogFields): void;
+  info(event: string, fields?: LogFields): void;
+  warn(event: string, fields?: LogFields): void;
+  error(event: string, fields?: LogFields): void;
+}
+
+export const noopLogger: Logger = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+};
+
+/**
+ * Routes metric events to the logger so counters and timings are visible in
+ * compositions that have not selected a metrics backend. Production
+ * compositions replace this with a real exporter (ADR-0009, ADR-0011).
+ */
+export function loggingMetrics(logger: Logger): Metrics {
+  return {
+    increment: (name, tags) => logger.debug('metric.counter', { metric: name, ...tags }),
+    observe: (name, milliseconds, tags) =>
+      logger.debug('metric.timing', { metric: name, durationMs: milliseconds, ...tags }),
+  };
+}
+
 export interface RetryPolicy {
   maxAttempts: number;
   baseDelayMs: number;

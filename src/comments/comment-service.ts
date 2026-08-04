@@ -5,9 +5,15 @@ import {
   validatePagination,
   validateReplyToCommentCommand,
 } from '../shared/validation.js';
-import { noopMetrics, type Metrics } from '../shared/observability.js';
+import {
+  noopLogger,
+  noopMetrics,
+  type LogFields,
+  type Logger,
+  type Metrics,
+} from '../shared/observability.js';
 import { requireCapability } from '../platforms/provider-registry.js';
-import type { Comment, PageCursor, PublishedPost, TenantContext } from '../shared/types.js';
+import type { Comment, PageCursor, PublishedPost, RequestContext } from '../shared/types.js';
 import type { ReplyOperation } from '../shared/types.js';
 import type {
   CommentRepository,
@@ -31,6 +37,7 @@ export class CommentService {
     private readonly operations: ReplyOperationRepository,
     private readonly providers: PlatformProviderRegistry,
     private readonly metrics: Metrics = noopMetrics,
+    private readonly logger: Logger = noopLogger,
   ) {}
 
   /**
@@ -38,7 +45,7 @@ export class CommentService {
    * the snapshot cannot answer the requested position (Spec-008).
    */
   public async listComments(
-    context: TenantContext,
+    context: RequestContext,
     postId: string,
     request: ListCommentsRequest,
   ): Promise<ListCommentsResult> {
@@ -60,7 +67,8 @@ export class CommentService {
       let providerCursor = cursor.providerCursor;
 
       const upstreamMayHaveMore = cursor.after === null || cursor.providerCursor !== null;
-      if (page.items.length === 0 && upstreamMayHaveMore) {
+      const hydrated = page.items.length === 0 && upstreamMayHaveMore;
+      if (hydrated) {
         providerCursor = await this.hydrate(context, post, providerCursor, request.limit);
         page = await this.comments.listByPost(context, query);
       }
@@ -78,22 +86,33 @@ export class CommentService {
       };
       validatePagination(pagination);
 
+      const durationMs = Date.now() - startedAt;
       this.metrics.increment('comments.list.success', { platform: post.platform });
-      this.metrics.observe('comments.list.duration_ms', Date.now() - startedAt, {
+      this.metrics.observe('comments.list.duration_ms', durationMs, { platform: post.platform });
+      this.logger.info(hydrated ? 'comments.list.hydrated' : 'comments.list.served_from_cache', {
+        ...this.trace(context),
+        postId,
         platform: post.platform,
+        returned: page.items.length,
+        hasMore,
+        durationMs,
       });
       return { items: page.items, pagination };
     } catch (error) {
-      this.metrics.increment('comments.list.failure', {
+      const code = toFailureCode(error);
+      this.metrics.increment('comments.list.failure', { platform: post.platform, code });
+      this.logger.warn('comments.list.failed', {
+        ...this.trace(context),
+        postId,
         platform: post.platform,
-        code: toFailureCode(error),
+        code,
       });
       throw error;
     }
   }
 
   public async replyToComment(
-    context: TenantContext,
+    context: RequestContext,
     commentId: string,
     body: string,
     idempotencyKey: string,
@@ -105,7 +124,15 @@ export class CommentService {
     const previous = await this.operations.findByIdempotencyKey(context, idempotencyKey);
     if (previous) {
       const replayed = await this.replay(context, previous, fingerprint);
-      if (replayed) return replayed;
+      if (replayed) {
+        this.metrics.increment('comments.reply.replayed', { platform: replayed.platform });
+        this.logger.info('comments.reply.replayed', {
+          ...this.trace(context),
+          commentId,
+          replyId: replayed.id,
+        });
+        return replayed;
+      }
     }
 
     const comment = await this.comments.findById(context, commentId);
@@ -139,6 +166,12 @@ export class CommentService {
       const replayed = await this.replay(context, claim.operation, fingerprint);
       if (replayed) return replayed;
       this.metrics.increment('comments.reply.duplicate_attempted', { platform: comment.platform });
+      this.logger.warn('comments.reply.conflict', {
+        ...this.trace(context),
+        commentId,
+        platform: comment.platform,
+        reason: 'in_progress',
+      });
       throw new ServiceError(
         'IDEMPOTENCY_CONFLICT',
         'A reply for this idempotency key is already in progress.',
@@ -146,6 +179,7 @@ export class CommentService {
       );
     }
 
+    const startedAt = Date.now();
     try {
       const reply = await provider.replyToComment({ post, parentExternalCommentId, body });
       const [stored] = await this.comments.upsertMany(context, [reply]);
@@ -154,6 +188,15 @@ export class CommentService {
       }
       await this.operations.complete(context, claim.operation.id, stored.id);
       this.metrics.increment('comments.reply.success', { platform: comment.platform });
+      this.logger.info('comments.reply.published', {
+        ...this.trace(context),
+        commentId,
+        replyId: stored.id,
+        platform: comment.platform,
+        // Length rather than content: reply bodies are user data (ADR-0011).
+        bodyLength: body.length,
+        durationMs: Date.now() - startedAt,
+      });
       return stored;
     } catch (error) {
       const failureCode = toFailureCode(error);
@@ -168,18 +211,26 @@ export class CommentService {
       if (failureCode === 'PROVIDER_RATE_LIMITED') {
         this.metrics.increment('comments.reply.rate_limited', { platform: comment.platform });
       }
+      this.logger.warn('comments.reply.failed', {
+        ...this.trace(context),
+        commentId,
+        platform: comment.platform,
+        code: failureCode,
+        durationMs: Date.now() - startedAt,
+      });
       throw error;
     }
   }
 
   private async hydrate(
-    context: TenantContext,
+    context: RequestContext,
     post: PublishedPost,
     providerCursor: string | null,
     limit: number,
   ): Promise<string | null> {
     const provider = this.providers.get(post.platform);
     requireCapability(provider, 'list_comments');
+    const startedAt = Date.now();
     const page = await provider.listComments({
       post,
       limit,
@@ -187,7 +238,19 @@ export class CommentService {
     });
     if (page.items.length > 0) await this.comments.upsertMany(context, page.items);
     this.metrics.increment('comments.list.hydrated', { platform: post.platform });
+    this.logger.info('provider.list.completed', {
+      ...this.trace(context),
+      platform: post.platform,
+      postId: post.id,
+      fetched: page.items.length,
+      hasMore: page.hasMore,
+      durationMs: Date.now() - startedAt,
+    });
     return page.hasMore ? page.nextProviderCursor : null;
+  }
+
+  private trace(context: RequestContext): LogFields {
+    return { requestId: context.requestId, accountId: context.accountId };
   }
 
   /**
@@ -196,7 +259,7 @@ export class CommentService {
    * provider may be unknown, so replaying it could duplicate a published reply.
    */
   private async replay(
-    context: TenantContext,
+    context: RequestContext,
     operation: ReplyOperation,
     fingerprint: string,
   ): Promise<Comment | null> {

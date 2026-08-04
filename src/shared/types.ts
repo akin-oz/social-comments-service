@@ -48,6 +48,15 @@ export interface TenantContext {
   accountId: AccountId;
 }
 
+/**
+ * Tenancy plus the correlation identifier for the request that caused the work
+ * (ADR-0011). Application services take this; repositories keep taking
+ * {@link TenantContext}, since tenancy is all they need.
+ */
+export interface RequestContext extends TenantContext {
+  requestId: string;
+}
+
 export interface PublishedPost {
   id: string;
   accountId: AccountId;

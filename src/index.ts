@@ -19,36 +19,83 @@ import type {
   PostRepository,
   ReplyOperationRepository,
 } from './comments/contracts.js';
-import { noopMetrics, type Metrics } from './shared/observability.js';
+import { loggingMetrics, type Logger, type Metrics } from './shared/observability.js';
 import type { Platform, PublishedPost } from './shared/types.js';
+
+/** Minimal shape of the Fastify logger this composition adapts. */
+interface StructuredLogSink {
+  debug(fields: Record<string, unknown>, message: string): void;
+  info(fields: Record<string, unknown>, message: string): void;
+  warn(fields: Record<string, unknown>, message: string): void;
+  error(fields: Record<string, unknown>, message: string): void;
+}
+
+/**
+ * Adapts the runtime logger to the {@link Logger} port so application code
+ * never imports a logging library (ADR-0011). The `event` name is promoted to
+ * a field because consumers match on it.
+ */
+export function toLoggerPort(sink: StructuredLogSink): Logger {
+  return {
+    debug: (event, fields) => sink.debug({ event, ...fields }, event),
+    info: (event, fields) => sink.info({ event, ...fields }, event),
+    warn: (event, fields) => sink.warn({ event, ...fields }, event),
+    error: (event, fields) => sink.error({ event, ...fields }, event),
+  };
+}
 
 export interface ApplicationDependencies {
   comments?: CommentRepository;
   posts?: PostRepository;
   operations?: ReplyOperationRepository;
-  providers?: ReadonlyMap<Platform, AdaptiveProvider>;
+  /**
+   * Either a ready registry, or a factory that receives the application logger
+   * so provider adapters can report retries and backoff.
+   */
+  providers?:
+    | ReadonlyMap<Platform, AdaptiveProvider>
+    | ((logger: Logger) => ReadonlyMap<Platform, AdaptiveProvider>);
   metrics?: Metrics;
   logger?: boolean;
 }
 
 export function createApplication(dependencies: ApplicationDependencies = {}): FastifyInstance {
+  const app = Fastify({
+    logger:
+      dependencies.logger === false
+        ? false
+        : {
+            level: process.env.LOG_LEVEL ?? 'info',
+            // Drop the client address and port: behind an internal gateway they
+            // identify the gateway, not the caller, and they are personal data.
+            serializers: {
+              req: (request: { method: string; url: string }) => ({
+                method: request.method,
+                url: request.url,
+              }),
+              res: (reply: { statusCode: number }) => ({ statusCode: reply.statusCode }),
+            },
+          },
+    requestIdHeader: 'x-request-id',
+  });
+  const logger = toLoggerPort(app.log);
+
   const comments = dependencies.comments ?? new InMemoryCommentRepository();
   const posts = dependencies.posts ?? new InMemoryPostRepository();
   const operations = dependencies.operations ?? new InMemoryReplyOperationRepository();
+  const configured = dependencies.providers ?? new Map<Platform, AdaptiveProvider>();
   const providers = new InMemoryPlatformProviderRegistry(
-    dependencies.providers ?? new Map<Platform, AdaptiveProvider>(),
+    typeof configured === 'function' ? configured(logger) : configured,
   );
   const service = new CommentService(
     comments,
     posts,
     operations,
     providers,
-    dependencies.metrics ?? noopMetrics,
+    dependencies.metrics ?? loggingMetrics(logger),
+    logger,
   );
-  const app = Fastify({
-    logger: dependencies.logger ?? true,
-    requestIdHeader: 'x-request-id',
-  });
+
   registerCommentRoutes(app, service);
   app.get('/health', async () => ({ status: 'ok' }));
   return app;
@@ -102,15 +149,22 @@ export function createDemoApplication(
     commentsByPost: new Map([[demoPost.externalPostId, demoExternalComments]]),
     maxPageSize: 2,
   });
-  const provider = new AdaptiveProviderAdapter(
-    demoPost.platform,
-    client,
-    new Set(['list_comments', 'reply_to_comment']),
-  );
   return createApplication({
     posts: new InMemoryPostRepository([demoPost]),
     comments: new InMemoryCommentRepository([], demoAccountId),
-    providers: new Map([[demoPost.platform, provider]]),
+    providers: (logger) =>
+      new Map([
+        [
+          demoPost.platform,
+          new AdaptiveProviderAdapter(
+            demoPost.platform,
+            client,
+            new Set(['list_comments', 'reply_to_comment']),
+            undefined,
+            logger,
+          ),
+        ],
+      ]),
     ...overrides,
   });
 }

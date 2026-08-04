@@ -34,7 +34,7 @@ This is the implementation backlog for the assignment. The roadmap explains mile
 ## Verification and delivery
 
 - [x] Add unit, contract, integration, and API tests.
-- [x] Add structured logging and request correlation.
+- [x] Add structured logging and request correlation (ADR-0011: logger port, `event` names, `RequestContext`, redaction, metrics bound to the logger).
 - [x] Document operational limits, retention, and failure recovery.
 - [x] Tighten CI to use `pnpm install --frozen-lockfile`.
 
