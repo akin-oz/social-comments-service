@@ -104,4 +104,13 @@ erDiagram
 
 ## Tenant context and RLS
 
-The application must set the transaction-local `app.account_id` value from trusted authentication context before querying tenant-owned tables. PostgreSQL row-level security policies fail closed when this value is absent. Repository predicates remain mandatory defense in depth, and policy behavior must be verified with at least two tenant identities before production enablement.
+The application sets the transaction-local `app.account_id` value from trusted authentication context before querying tenant-owned tables, which the `Database` port does for every operation (ADR-0012). Policies fail closed when the value is absent. Repository predicates remain mandatory defence in depth.
+
+Isolation depends on **which role connects**, not only on the policies existing:
+
+- `comments_owner` owns the schema and runs migrations and the seed.
+- `comments_app` runs the service. It owns nothing and is not a superuser, so the policies apply to it.
+
+PostgreSQL exempts superusers and `BYPASSRLS` roles from row-level security unconditionally, and exempts a table's owner unless `FORCE ROW LEVEL SECURITY` is set. Migration `002` sets `FORCE` on the four tenant tables and creates `comments_app`. `FORCE` alone is not sufficient against a superuser owner, which is why the role separation is the primary control and `FORCE` is the safeguard for managed environments where the owner is not a superuser.
+
+Policy behaviour is verified against a real database across two tenants in `tests/repositories/postgres.integration.test.ts`, including a query with its `account_id` predicate deliberately removed. That case is what distinguishes working row-level security from repository predicates that merely resemble isolation.

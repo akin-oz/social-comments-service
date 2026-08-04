@@ -150,7 +150,7 @@ The system’s reliability, security, and operational trade-offs are explicit an
 
 ## Milestone 9 — Provider-backed reads and core gaps
 
-Status: In progress — implementation complete, Postgres integration coverage outstanding
+Status: Complete
 
 ### Goal
 
@@ -158,14 +158,14 @@ Make the core assignment requirements work end-to-end and close correctness gaps
 
 ### Deliverables
 
-| Deliverable                                                           | Spec / ADR | State       |
-| --------------------------------------------------------------------- | ---------- | ----------- |
-| Provider-backed reads with cache-miss hydration                       | Spec 008   | Done        |
-| Internal UUID identity with external-ID mapping at adapter boundaries | ADR 0010   | Done        |
-| Keyset pagination over the `(post_id, published_at, id)` index        | Spec 009   | Done        |
-| Reply-path hardening: timeouts, rate limits, idempotency claim        | Spec 010   | Done        |
-| Fixture provider so the service runs without external dependencies    | Spec 008   | Done        |
-| Testcontainers harness for Postgres schema, RLS, and constraints      | Spec 009   | Not started |
+| Deliverable                                                           | Spec / ADR | State |
+| --------------------------------------------------------------------- | ---------- | ----- |
+| Provider-backed reads with cache-miss hydration                       | Spec 008   | Done  |
+| Internal UUID identity with external-ID mapping at adapter boundaries | ADR 0010   | Done  |
+| Keyset pagination over the `(post_id, published_at, id)` index        | Spec 009   | Done  |
+| Reply-path hardening: timeouts, rate limits, idempotency claim        | Spec 010   | Done  |
+| Fixture provider so the service runs without external dependencies    | Spec 008   | Done  |
+| PostgreSQL runtime, RLS verification, Docker, and seed                | Spec 012   | Done  |
 
 ### Definition of done
 
@@ -173,11 +173,9 @@ Make the core assignment requirements work end-to-end and close correctness gaps
 
 ### Remaining
 
-Every criterion is met except Postgres verification. Both endpoints were exercised against a running server, and 58 tests cover the domain, cursor codec, provider adapter, retry policy, in-memory repositories, service, and API.
+Nothing. PostgreSQL persistence runs, tenant isolation is verified against a real database across two tenants, and `docker compose up` yields a working system.
 
-`src/repositories/postgres.ts` is the one module no test executes. Its SQL, the `(social_account_id, external_comment_id)` and `(account_id, idempotency_key)` constraints, and the row-level security policies are all unverified, and every query in that file was rewritten under ADR-0010 and Spec-009. The in-memory adapter is the only proven persistence path; treat the PostgreSQL adapter as a reviewed design, not as working code.
-
-Two implementation outcomes diverge from the approved text and are recorded in the documents themselves: Spec-008 acceptance criterion 3 is unreachable under ADR-0010 identifiers, and ADR-0010's `findByExternalId` was dropped as having no caller.
+Two implementation outcomes diverge from their approved text and are recorded in the documents themselves: Spec-008 acceptance criterion 3 is unreachable under ADR-0010 identifiers, and ADR-0012 overstated what `FORCE ROW LEVEL SECURITY` protects against.
 
 ## Milestone 10 — Submission readiness
 
@@ -192,7 +190,7 @@ Make the repository answer the assignment brief directly, for a reviewer reading
 | Deliverable                                                            | State       | Blocks submission |
 | ---------------------------------------------------------------------- | ----------- | ----------------- |
 | Contract alignment: limits, header auth, `INTERNAL_ERROR`, cursor docs | Done        | —                 |
-| AI usage disclosure replacing the README placeholder                   | Not started | Yes               |
+| AI usage disclosure replacing the README placeholder                   | Done        | —                 |
 | "Design decisions" summary in the README linking to the ADRs           | Not started | Yes               |
 | Provider capability matrix populated from public API research          | Not started | No                |
 | OpenAPI generated from the Fastify schemas                             | Done        | —                 |
@@ -205,9 +203,7 @@ A reviewer can read the README and see what was built, which decisions were made
 
 The brief asks for four things: a database schema, an API design, relevant TypeScript code, and an explanation of major design decisions, plus a description of AI usage and documented assumptions.
 
-Schema, API design, and code are present and the two required operations work end to end. The gaps are in how the work is presented and in one verification hole:
+Schema, API design, code, assumptions, and the AI disclosure are all present, and the two required operations work end to end against both the in-memory and PostgreSQL compositions. Two gaps remain, neither of them in the implementation:
 
-1. **AI usage is still a placeholder.** The brief asks for it explicitly, and this repository is visibly agent-assisted, so an empty disclosure is the worst available state.
-2. **The design explanation is spread across ten ADRs.** The reasoning exists but a reviewer has to assemble it. The brief says reasoning is what is being evaluated, so it should be readable from the README.
-3. **The PostgreSQL adapter is unverified.** The schema is a named deliverable and its adapter has never executed.
-4. **The capability matrix shows no platform research.** The abstraction's value is that providers differ; the matrix currently does not show where.
+1. **The design explanation is spread across twelve ADRs.** The reasoning exists but a reviewer has to assemble it. The brief says reasoning is what is being evaluated, so it should be readable from the README. This is the last item that blocks submission.
+2. **The capability matrix shows no platform research.** The abstraction's value is that providers differ, and the matrix does not yet show where. Not a blocker, but it is the cheapest way to ground the abstraction in evidence.

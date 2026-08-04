@@ -66,11 +66,11 @@ This is the implementation backlog for the assignment. The roadmap explains mile
 - [x] Test reply path: publish, replay, key reuse, terminal failure, unsupported capability.
 - [x] Test provider call policy: timeout, transient retry, rate-limit guidance inside and beyond budget.
 - [x] Test fixture provider end to end through the API routes.
-- [ ] Add testcontainers integration harness: run Postgres, execute migrations, verify schema.
-- [ ] Test Postgres uniqueness constraints: comment deduplication (social_account_id, external_comment_id), idempotency (account_id, idempotency_key).
-- [ ] Test RLS across two tenant identities: deny cross-tenant reads, confirm account_id context isolation.
+- [x] Add a PostgreSQL integration harness via DATABASE_URL, with Compose locally and a CI service container (Spec-012).
+- [x] Test Postgres uniqueness constraints: comment deduplication and idempotency-key claim.
+- [x] Test RLS across two tenants, including a query with the account predicate removed.
 
-The Postgres repository is written against the approved schema but is still unexercised: no integration harness runs it. Until the three items above are done, treat `src/repositories/postgres.ts` as unverified.
+The PostgreSQL repository is now exercised against a real database. Running it surfaced three defects that had been invisible: `posts` has no `platform` column so every comment query referenced a column that does not exist, reply-operation rows were cast rather than mapped so every snake_case field read as `undefined` and broke idempotent retries, and neither the Docker build nor `docker compose` had ever succeeded.
 
 ## Milestone 10: Submission readiness
 

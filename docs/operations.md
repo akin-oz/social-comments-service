@@ -41,6 +41,26 @@ Logs never contain comment bodies, author display names, credentials, or provide
 
 `LOG_LEVEL` sets verbosity and defaults to `info`. Metric counters and timings are emitted at `debug` in compositions that have not selected a metrics backend, so `pnpm dev` shows them without a collector.
 
+## Database roles, migrations, and seeding
+
+Two roles exist, and the separation is what makes tenant isolation real rather than nominal (ADR-0012).
+
+| Role             | Used by                | Why                                                                   |
+| ---------------- | ---------------------- | --------------------------------------------------------------------- |
+| `comments_owner` | migrations and seeding | Owns the schema. Typically a superuser locally.                       |
+| `comments_app`   | the running service    | Owns nothing and is not a superuser, so the RLS policies apply to it. |
+
+**The service must never connect as a superuser or as the schema owner.** PostgreSQL exempts superusers and `BYPASSRLS` roles from row-level security unconditionally, and exempts a table's owner unless the table is set to `FORCE ROW LEVEL SECURITY`. A deployment that shares one credential between migrations and the service silently disables tenant isolation while `\d` still reports the policies as enabled.
+
+```bash
+pnpm migrate   # applies migrations/ in order, records them, safe to re-run
+pnpm seed      # reference tenants, social accounts, and posts; idempotent
+```
+
+Migrations run once per release from a single runner, never on API startup, so replicas cannot race each other. `APP_DATABASE_PASSWORD` sets the service role's password during migration; credentials never live in a migration file.
+
+`docker compose up` runs PostgreSQL, then migrate and seed as a one-shot step, then the service.
+
 ## Data and security
 
 The application establishes `app.account_id` from trusted authentication context inside the database transaction. RLS policies fail closed when that setting is absent. Tokens are referenced, not stored, in this service schema. Logs must not contain credentials or full comment bodies unless explicitly needed for a controlled incident.

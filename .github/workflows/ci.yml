@@ -8,6 +8,24 @@ on:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    services:
+      # Tenant isolation can only be observed against a real database, so the
+      # integration suite runs here rather than being skipped (Spec-012).
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: comments_owner
+          POSTGRES_PASSWORD: owner_password
+          POSTGRES_DB: comments
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U comments_owner -d comments"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://comments_owner:owner_password@localhost:5432/comments
+      APP_DATABASE_URL: postgres://comments_app:app_password@localhost:5432/comments
+      APP_DATABASE_PASSWORD: app_password
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -22,6 +40,10 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm format:check
+      - name: Prepare the database
+        run: |
+          pnpm migrate
+          pnpm seed
       - run: pnpm test
       - name: Verify the OpenAPI document matches the route schemas
         run: |

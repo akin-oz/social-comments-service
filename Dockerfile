@@ -13,6 +13,8 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 COPY --from=build /app/dist ./dist
+# The migration runner reads these at run time, so they ship with the image.
+COPY --from=build /app/migrations ./migrations
 USER node
 EXPOSE 3000
 CMD ["node", "dist/src/server.js"]

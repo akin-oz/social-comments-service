@@ -1,11 +1,23 @@
-import { createDemoApplication, demoAccountId, demoPost } from './index.js';
+import {
+  createDemoApplication,
+  createPostgresApplication,
+  demoAccountId,
+  demoPost,
+} from './index.js';
+import type { Database } from './repositories/database.js';
 
 const port = Number.parseInt(process.env.PORT ?? '3000', 10);
 const host = process.env.HOST ?? '0.0.0.0';
+const databaseUrl = process.env.DATABASE_URL;
 
-// No live provider or database is selected, so the demo composition (fixture
-// provider, in-memory repositories) is the only runnable one. See docs/operations.md.
-const application = createDemoApplication();
+// With DATABASE_URL the service runs on PostgreSQL; without it, on in-memory
+// repositories so the demo needs nothing installed. Either way the provider is
+// the deterministic fixture, since no live platform SDK is selected.
+const composed = databaseUrl
+  ? createPostgresApplication(databaseUrl)
+  : { application: createDemoApplication(), database: undefined as Database | undefined };
+
+const { application, database } = composed;
 
 application
   .listen({ port, host })
@@ -15,9 +27,9 @@ application
         event: 'service.started',
         address,
         logLevel: process.env.LOG_LEVEL ?? 'info',
-        composition: 'demo',
+        composition: databaseUrl ? 'postgres' : 'demo',
         provider: 'fixture',
-        persistence: 'in-memory',
+        persistence: databaseUrl ? 'postgres' : 'in-memory',
         accountId: demoAccountId,
         postId: demoPost.id,
       },
@@ -27,6 +39,7 @@ application
       {
         event: 'service.demo_hint',
         listComments: `curl '${address}/v2/posts/${demoPost.id}/comments?limit=2' -H 'X-Account-Id: ${demoAccountId}'`,
+        documentation: `${address}/documentation`,
       },
       'service.demo_hint',
     );
@@ -35,3 +48,13 @@ application
     application.log.error({ event: 'service.start_failed', err: error }, 'service.start_failed');
     process.exitCode = 1;
   });
+
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.once(signal, () => {
+    // Close the server first so in-flight requests finish before the pool goes.
+    void application
+      .close()
+      .then(() => database?.close())
+      .catch(() => undefined);
+  });
+}

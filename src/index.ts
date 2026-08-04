@@ -15,6 +15,13 @@ import {
   InMemoryPostRepository,
   InMemoryReplyOperationRepository,
 } from './repositories/in-memory.js';
+import {
+  PostgresCommentRepository,
+  PostgresPostRepository,
+  PostgresReplyOperationRepository,
+} from './repositories/postgres.js';
+import { PostgresDatabase, type Database } from './repositories/database.js';
+import { seedTenants } from './seed-data.js';
 import type {
   AdaptiveProvider,
   CommentRepository,
@@ -195,9 +202,83 @@ const demoExternalComments: readonly ExternalCommentRecord[] = [
   },
 ];
 
+const secondTenantExternalComments: readonly ExternalCommentRecord[] = [
+  {
+    externalId: 'ig-comment-11',
+    authorId: 'ig-author-11',
+    authorName: 'Radia Perlman',
+    body: 'Does this ship on Android too?',
+    publishedAt: '2026-08-01T10:15:00.000Z',
+    updatedAt: '2026-08-01T10:15:00.000Z',
+  },
+  {
+    externalId: 'ig-comment-12',
+    authorId: 'ig-author-12',
+    authorName: 'Barbara Liskov',
+    body: 'Following for the release notes.',
+    publishedAt: '2026-08-01T11:15:00.000Z',
+    updatedAt: '2026-08-01T11:15:00.000Z',
+  },
+];
+
 /**
- * Composition used by `pnpm dev`. The comment cache starts empty so the first
- * request exercises provider-backed hydration rather than seeded data.
+ * Fixture comments per provider post.
+ *
+ * Each post has distinct external identifiers because ADR-0010 derives a
+ * comment's internal identity from `(platform, externalId)`. Reusing one set
+ * across two posts would derive one identity for two comments and collide on
+ * the primary key, which is what a real provider's globally unique comment
+ * identifiers prevent.
+ */
+const fixtureCommentsByPost = new Map<string, readonly ExternalCommentRecord[]>([
+  ['ig-post-1', demoExternalComments],
+  ['ig-post-2', secondTenantExternalComments],
+]);
+
+/**
+ * Composition backed by PostgreSQL, selected when `DATABASE_URL` is set.
+ *
+ * Persistence is real; the provider is still the deterministic fixture, since
+ * no live platform SDK is selected. Comments are not seeded, so the first read
+ * of a seeded post exercises provider hydration and writes rows through the
+ * tenant-scoped transaction boundary (ADR-0012).
+ */
+export function createPostgresApplication(
+  connectionString: string,
+  overrides: Pick<ApplicationDependencies, 'logger' | 'apiDocs'> = {},
+): { application: FastifyInstance; database: Database } {
+  const database = new PostgresDatabase(connectionString);
+  const client = new FixtureProviderClient({
+    commentsByPost: fixtureCommentsByPost,
+    maxPageSize: 2,
+  });
+
+  const application = createApplication({
+    comments: new PostgresCommentRepository(database),
+    posts: new PostgresPostRepository(database),
+    operations: new PostgresReplyOperationRepository(database),
+    providers: (logger) =>
+      new Map(
+        seedTenants.map((tenant) => [
+          tenant.platform,
+          new AdaptiveProviderAdapter(
+            tenant.platform,
+            client,
+            new Set(['list_comments', 'reply_to_comment']),
+            undefined,
+            logger,
+          ),
+        ]),
+      ),
+    ...overrides,
+  });
+  return { application, database };
+}
+
+/**
+ * Composition used by `pnpm dev` without a database. The comment cache starts
+ * empty so the first request exercises provider-backed hydration rather than
+ * seeded data.
  */
 export function createDemoApplication(
   overrides: Pick<ApplicationDependencies, 'logger' | 'apiDocs'> = {},

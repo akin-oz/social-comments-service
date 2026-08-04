@@ -1,2 +1,5 @@
+# esbuild compiles a platform binary in its install script, and it backs both
+# tsx and vitest. pnpm refuses to run dependency build scripts until they are
+# approved here, so a non-interactive install fails while this is unanswered.
 allowBuilds:
-  esbuild: set this to true or false
+  esbuild: true

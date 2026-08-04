@@ -69,11 +69,23 @@ pnpm test
 
 ## Running the service
 
+Two ways, depending on whether you want a real database.
+
+### With PostgreSQL, via Docker
+
+```bash
+docker compose up --build
+```
+
+This starts PostgreSQL, applies migrations and seeds two tenants as a one-shot step, then starts the service on port 3000. The service connects as `comments_app`, a role that owns nothing and is not a superuser, so the row-level security policies actually apply to it — see [ADR-0012](docs/decisions/0012-tenant-context-per-operation.md).
+
+### Without a database
+
 ```bash
 pnpm dev
 ```
 
-No live provider or database is selected, so the runnable composition uses the deterministic fixture provider and in-memory repositories. The comment snapshot starts empty, so the first read exercises provider-backed hydration rather than seeded data.
+In-memory repositories and the fixture provider, so nothing needs installing. The comment snapshot starts empty either way, so the first read exercises provider-backed hydration rather than seeded data.
 
 ```bash
 curl 'http://localhost:3000/v2/posts/2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b002/comments?limit=2' -H 'X-Account-Id: 2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b001'
