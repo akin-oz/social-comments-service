@@ -104,6 +104,20 @@ describe('in-memory reply operation repository', () => {
     ).resolves.toMatchObject({ claimed: false, operation: { id: 'operation-1' } });
   });
 
+  it('grants a key to exactly one of two concurrent callers', async () => {
+    // The claim previously scanned for the key behind an await, so both callers
+    // passed the check and both were granted it. This asserted two before.
+    const operations = new InMemoryReplyOperationRepository();
+
+    const [first, second] = await Promise.all([
+      operations.claim(tenant, { ...operation, id: crypto.randomUUID() }),
+      operations.claim(tenant, { ...operation, id: crypto.randomUUID() }),
+    ]);
+
+    expect([first.claimed, second.claimed].filter(Boolean)).toHaveLength(1);
+    expect(first.operation.id).toBe(second.operation.id);
+  });
+
   it('scopes idempotency keys to the tenant', async () => {
     const operations = new InMemoryReplyOperationRepository();
     await operations.claim(tenant, operation);

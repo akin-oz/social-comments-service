@@ -125,28 +125,39 @@ export class InMemoryPostRepository implements PostRepository {
 
 export class InMemoryReplyOperationRepository implements ReplyOperationRepository {
   private readonly operations = new Map<string, ReplyOperation>();
+  /**
+   * Idempotency key to operation id. This index is what plays the role the
+   * unique constraint plays in PostgreSQL: without it the claim had to scan by
+   * key, and the scan sat behind an `await`, so two concurrent callers both
+   * passed the check and both were granted the same key.
+   */
+  private readonly claimedKeys = new Map<string, string>();
 
   public async findByIdempotencyKey(
     context: TenantContext,
     key: string,
   ): Promise<ReplyOperation | null> {
-    return (
-      [...this.operations.values()].find(
-        (operation) =>
-          operation.accountId === context.accountId && operation.idempotencyKey === key,
-      ) ?? null
-    );
+    return this.byIdempotencyKey(context, key);
   }
 
   public async claim(
     context: TenantContext,
     operation: Omit<ReplyOperation, 'accountId'>,
   ): Promise<ReplyOperationClaim> {
-    const existing = await this.findByIdempotencyKey(context, operation.idempotencyKey);
+    // Test and set with nothing awaited in between, so no other caller can
+    // interleave between the check and the write.
+    const existing = this.byIdempotencyKey(context, operation.idempotencyKey);
     if (existing) return { operation: existing, claimed: false };
     const stored: ReplyOperation = { ...operation, accountId: context.accountId };
+    this.claimedKeys.set(scopedKey(context.accountId, operation.idempotencyKey), operation.id);
     this.operations.set(scopedKey(context.accountId, operation.id), stored);
     return { operation: stored, claimed: true };
+  }
+
+  private byIdempotencyKey(context: TenantContext, key: string): ReplyOperation | null {
+    const id = this.claimedKeys.get(scopedKey(context.accountId, key));
+    if (id === undefined) return null;
+    return this.operations.get(scopedKey(context.accountId, id)) ?? null;
   }
 
   public async complete(

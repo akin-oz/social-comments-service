@@ -296,6 +296,21 @@ describe('replying to a comment', () => {
     ).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT', statusCode: 409 });
   });
 
+  it('does not record a published reply as failed when storing it breaks', async () => {
+    // The provider published. If storage then fails and the operation is marked
+    // failed, the client is told to retry with a new key and publishes twice.
+    const { service, operations, comments, parentId } = await withCachedComments();
+    comments.upsertMany = async () => {
+      throw new Error('database unavailable');
+    };
+
+    await expect(service.replyToComment(tenant, parentId, 'Thank you!', 'key-1')).rejects.toThrow();
+
+    const operation = await operations.findByIdempotencyKey(tenant, 'key-1');
+    expect(operation?.status).not.toBe('failed');
+    expect(operation?.status).toBe('pending');
+  });
+
   it('reports an unknown comment rather than guessing provider coordinates', async () => {
     const { service } = await withCachedComments();
 

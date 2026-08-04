@@ -191,24 +191,14 @@ export class CommentService {
     }
 
     const startedAt = Date.now();
+
+    // Only a provider failure may mark the operation failed. Everything after
+    // this point has a published reply behind it, and recording that as failed
+    // would tell the client to retry with a new key and publish a second reply
+    // under someone else's name.
+    let reply;
     try {
-      const reply = await provider.replyToComment({ post, parentExternalCommentId, body });
-      const [stored] = await this.comments.upsertMany(context, [reply]);
-      if (!stored) {
-        throw new ServiceError('INTERNAL_ERROR', 'The published reply could not be stored.', 500);
-      }
-      await this.operations.complete(context, claim.operation.id, stored.id);
-      this.metrics.increment('comments.reply.success', { platform: comment.platform });
-      this.logger.info('comments.reply.published', {
-        ...this.trace(context),
-        commentId,
-        replyId: stored.id,
-        platform: comment.platform,
-        // Length rather than content: reply bodies are user data (ADR-0011).
-        bodyLength: body.length,
-        durationMs: Date.now() - startedAt,
-      });
-      return stored;
+      reply = await provider.replyToComment({ post, parentExternalCommentId, body });
     } catch (error) {
       const failureCode = toFailureCode(error);
       await this.operations.fail(context, claim.operation.id, failureCode);
@@ -227,6 +217,39 @@ export class CommentService {
         commentId,
         platform: comment.platform,
         code: failureCode,
+        durationMs: Date.now() - startedAt,
+      });
+      throw error;
+    }
+
+    try {
+      const [stored] = await this.comments.upsertMany(context, [reply]);
+      if (!stored) {
+        throw new ServiceError('INTERNAL_ERROR', 'The published reply could not be stored.', 500);
+      }
+      await this.operations.complete(context, claim.operation.id, stored.id);
+      this.metrics.increment('comments.reply.success', { platform: comment.platform });
+      this.logger.info('comments.reply.published', {
+        ...this.trace(context),
+        commentId,
+        replyId: stored.id,
+        platform: comment.platform,
+        // Length rather than content: reply bodies are user data (ADR-0011).
+        bodyLength: body.length,
+        durationMs: Date.now() - startedAt,
+      });
+      return stored;
+    } catch (error) {
+      // The reply exists at the provider but could not be recorded. The
+      // operation deliberately stays pending rather than failed: a later
+      // request is told the work is in flight, not invited to repeat it.
+      this.metrics.increment('comments.reply.orphaned', { platform: comment.platform });
+      this.logger.error('comments.reply.orphaned', {
+        ...this.trace(context),
+        commentId,
+        platform: comment.platform,
+        externalReplyId: reply.externalId,
+        code: toFailureCode(error),
         durationMs: Date.now() - startedAt,
       });
       throw error;
