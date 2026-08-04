@@ -113,6 +113,31 @@ describe('documentation endpoints', () => {
     await app.close();
   });
 
+  it('is off by default in production, and opts back in explicitly', async () => {
+    // The container image sets NODE_ENV=production, so this rule decides
+    // whether /documentation exists in Docker. It was untested until the
+    // Compose stack answered 404 on a URL the README advertised.
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousFlag = process.env.ENABLE_API_DOCS;
+    try {
+      process.env.NODE_ENV = 'production';
+      delete process.env.ENABLE_API_DOCS;
+      const off = createDemoApplication({ logger: false });
+      expect((await off.inject({ method: 'GET', url: '/openapi.json' })).statusCode).toBe(404);
+      await off.close();
+
+      process.env.ENABLE_API_DOCS = 'true';
+      const on = createDemoApplication({ logger: false });
+      expect((await on.inject({ method: 'GET', url: '/openapi.json' })).statusCode).toBe(200);
+      await on.close();
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+      if (previousFlag === undefined) delete process.env.ENABLE_API_DOCS;
+      else process.env.ENABLE_API_DOCS = previousFlag;
+    }
+  });
+
   it('still requires an account context for the API itself', async () => {
     const app = createDemoApplication({ logger: false, apiDocs: true });
 

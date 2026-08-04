@@ -110,6 +110,8 @@ Repeating that request with the same key returns the same reply instead of publi
 
 Interactive documentation is at [http://localhost:3000/documentation](http://localhost:3000/documentation), and the OpenAPI 3.1 document at `/openapi.json`. Both are generated from the route schemas rather than maintained by hand, and CI fails if the committed [docs/openapi.json](docs/openapi.json) no longer matches them. Use **Authorize** in the UI to supply the account header, then either operation can be executed against the fixture provider.
 
+Documentation endpoints are served when `ENABLE_API_DOCS` is set and are off by default when `NODE_ENV=production`, so a deployed service does not publish its own schema. The container image sets `NODE_ENV=production`, so the Compose stack opts back in explicitly; `pnpm dev` has them on without configuration.
+
 ## Contribution workflow
 
 The expected workflow is:

@@ -36,6 +36,11 @@ services:
       DATABASE_URL: postgres://comments_app:app_password@postgres:5432/comments
       PORT: '3000'
       LOG_LEVEL: info
+      # The image sets NODE_ENV=production, which switches API documentation
+      # off by default (Spec-011). This stack is local orchestration for
+      # reviewers, not a deployment, so the documented opt-in is applied here
+      # to keep /documentation reachable. A real deployment leaves it unset.
+      ENABLE_API_DOCS: 'true'
     ports:
       - '3000:3000'
     depends_on:
