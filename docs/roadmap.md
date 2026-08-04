@@ -191,7 +191,7 @@ Make the repository answer the assignment brief directly, for a reviewer reading
 | ---------------------------------------------------------------------- | ----------- | ----------------- |
 | Contract alignment: limits, header auth, `INTERNAL_ERROR`, cursor docs | Done        | —                 |
 | AI usage disclosure replacing the README placeholder                   | Done        | —                 |
-| "Design decisions" summary in the README linking to the ADRs           | Not started | Yes               |
+| "Design decisions" summary in the README linking to the ADRs           | Done        | —                 |
 | Provider capability matrix populated from public API research          | Not started | No                |
 | OpenAPI generated from the Fastify schemas                             | Done        | —                 |
 
@@ -205,5 +205,6 @@ The brief asks for four things: a database schema, an API design, relevant TypeS
 
 Schema, API design, code, assumptions, and the AI disclosure are all present, and the two required operations work end to end against both the in-memory and PostgreSQL compositions. Two gaps remain, neither of them in the implementation:
 
-1. **The design explanation is spread across twelve ADRs.** The reasoning exists but a reviewer has to assemble it. The brief says reasoning is what is being evaluated, so it should be readable from the README. This is the last item that blocks submission.
-2. **The capability matrix shows no platform research.** The abstraction's value is that providers differ, and the matrix does not yet show where. Not a blocker, but it is the cheapest way to ground the abstraction in evidence.
+Nothing blocks submission. The README now states the seven decisions that shaped the service, what each cost, and what was deliberately left out, with links into the ADRs and specifications for depth.
+
+One improvement remains and is not a blocker: the capability matrix records no research into real platforms. The provider abstraction's justification is that platforms differ, and the matrix does not yet show where. It is the cheapest remaining way to ground that argument in evidence rather than assertion.

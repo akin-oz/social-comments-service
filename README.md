@@ -2,7 +2,7 @@
 
 An extensible comment service for a social media scheduling platform.
 
-This repository contains a production-oriented partial implementation of the Blotato Senior Software Engineer take-home assignment. It remains architecture-first: contracts, assumptions, decisions, and implementation boundaries are explicit and tested.
+This repository implements the Blotato Senior Software Engineer take-home assignment. Both required operations — retrieving comments for a published post and replying to a comment — work end to end: on PostgreSQL with verified tenant isolation, and on in-memory adapters so the service runs with nothing installed. No live social platform SDK is selected; a deterministic fixture provider stands behind the same contract a real one would implement.
 
 ## Project overview
 
@@ -18,42 +18,51 @@ This is not intended to be a CRUD wrapper. The design treats external platforms 
 - Expose the capabilities through a versioned REST API.
 - Define the database model and implement a PostgreSQL migration boundary without coupling the application to a database client.
 
-## Architecture philosophy
+## Design decisions
 
-- Prefer a modular monolith over premature distributed systems.
-- Keep domain-facing interfaces independent from Fastify, persistence, and provider SDKs.
-- Depend inward on contracts; let infrastructure implement those contracts.
-- Normalize the API around platform-neutral concepts while preserving provider identifiers and metadata.
-- Make assumptions and trade-offs explicit in documentation and ADRs.
-- Add complexity only when a concrete requirement justifies it.
+Seven decisions shaped this service. Each is stated with what it cost, because a decision without a cost is usually a decision that was never made. The linked ADR or specification carries the full argument, including the alternatives that were rejected.
 
-See [architecture](docs/architecture.md), [assumptions](docs/assumptions.md), and [database design](docs/database.md) for the initial decisions.
+**Platform differences are made explicit, never emulated.** Every provider sits behind one adapter interface and declares which operations it supports. A platform that cannot perform an operation produces a typed `UNSUPPORTED_CAPABILITY` error rather than the service quietly faking it, because emulating a missing capability converts a platform difference into a data problem that surfaces much later and far from its cause. Adding a platform means writing an adapter, wiring credentials, and recording its capabilities — no route, use case, or schema changes. The cost is a layer of indirection between the service and every provider, worth paying only because the brief says more platforms are coming. See [ADR-0004](docs/decisions/0004-platform-abstraction.md) and the [capability matrix](docs/provider-capability-matrix.md).
+
+**The database is a snapshot of an authoritative source, not the system of record.** Providers own comments; this service stores what it has observed. A read serves from the snapshot and fetches from the provider when the snapshot cannot fill the page, and each post records how much of its provider stream has been read, so pagination can distinguish an exhausted provider from one that was never asked. Treating the database as the source of truth would make every read cheap and every answer potentially wrong. The cost is that a comment edited or deleted upstream stays as last observed until webhook ingestion exists, which is deferred deliberately. See [Spec-008](specs/008-provider-backed-reads.md), [Spec-013](specs/013-snapshot-completeness.md), and assumption A-003.
+
+**Comment identity is a service-owned UUID derived from the provider's identifier.** Identities are computed as a version 5 UUID over `(platform, externalId)`, so observing the same provider comment twice converges on one row without a lookup, and provider identifiers never reach an API client. The obvious alternative, exposing `platform:externalId` directly, leaks provider structure into the public contract and makes a provider's identifier scheme impossible to change without rewriting stored data. The cost is an assumption that provider comment identifiers are unique within a platform; violating it collides on the primary key, so it is stated rather than hoped for. See [ADR-0010](docs/decisions/0010-identifier-mapping.md).
+
+**Pagination is keyset-based behind opaque cursors.** Cursors encode the last returned `(publishedAt, id)` pair rather than an offset, because offset paging over data that changes underneath the caller produces duplicates and gaps — and comments arriving mid-pagination is the normal case here, not an edge case. Clients cannot decode or construct cursors, which keeps the encoding free to change. The cost is forward-only paging, which no requirement contradicts. See [Spec-009](specs/009-keyset-pagination.md) and assumption A-008.
+
+**Replies are at-most-once, and a failed attempt is terminal.** A reply claims its idempotency key by inserting a row, so concurrent requests cannot both reach the provider, and a retry returns the reply already published instead of publishing a second one. When an attempt fails, that key is finished: the outcome at the provider may be genuinely unknown after a timeout, so retrying under the same key could duplicate a real published reply. A client that wants to try again supplies a new key and thereby says so explicitly. This is the deliberate choice of a duplicate-free system over a self-healing one, which is the right way round for content posted under someone else's name. See [Spec-010](specs/010-reply-path-reliability.md) and assumption A-009.
+
+**Tenant isolation is enforced twice, in the query and in the database.** Every repository query filters by account, and PostgreSQL row-level security independently rejects rows belonging to another tenant. Either alone is a single point of failure: one forgotten predicate is an unbounded leak, and policies can be weakened by a later migration. Making this real required more than enabling the policies — PostgreSQL exempts superusers and a table's owner, so the service connects as a role that is neither, and the isolation is verified against a live database with the query predicate deliberately removed. The cost is two sets of credentials in every environment. See [ADR-0012](docs/decisions/0012-tenant-context-per-operation.md) and assumption A-011.
+
+**Dependencies point inward, so infrastructure stays replaceable.** The application layer depends on ports — provider, repository, logger, metrics — and never on Fastify, `pg`, or a logging library. That is what lets the same service run on in-memory repositories with a fixture provider for tests and on PostgreSQL for real, and it is why the observability work could add structured events without the domain learning what a log is. The cost is more interfaces than a CRUD wrapper needs, which is the price of the platform boundary being the point of the exercise. See [ADR-0002](docs/decisions/0002-architecture-style.md) and [architecture](docs/architecture.md).
+
+### What was deliberately not built
+
+Judgement shows as much in what is absent. There are no microservices, queues, event sourcing, or CQRS: the two required operations are synchronous, and a modular monolith is the smallest thing that satisfies them ([ADR-0002](docs/decisions/0002-architecture-style.md), [ADR-0009](docs/decisions/0009-production-polish.md)). There is no webhook ingestion or background synchronisation, so reads stay on demand (A-006). No live provider SDK is selected; a deterministic fixture provider stands in, because inventing one platform's behaviour would prove less about the abstraction than keeping every provider behind the same contract. Authentication is assumed to happen upstream and the tenant arrives in a header (A-001). Each of these is an assumption in [docs/assumptions.md](docs/assumptions.md), so changing one is a documented decision rather than a surprise.
+
+### Where the reasoning lives
+
+[docs/assumptions.md](docs/assumptions.md) states what the design takes for granted, [docs/decisions/](docs/decisions/) holds the architectural decisions, and [specs/](specs/) holds the change proposals that had to be approved before implementation. Where implementation contradicted an approved document — three of them so far — the document records the correction rather than quietly diverging, so a specification and the code it governs can be trusted to agree. [docs/api-design.md](docs/api-design.md) and [docs/database.md](docs/database.md) remain the contract references, and [docs/openapi.json](docs/openapi.json) is generated from the routes so the two cannot drift unnoticed.
 
 ## Repository structure
 
 ```text
 .
-├── README.md
-├── docs/
-│   ├── architecture.md
-│   ├── assumptions.md
-│   ├── api-design.md
-│   ├── database.md
-│   ├── roadmap.md
-│   ├── decisions/
-│   │   └── README.md
-│   └── diagrams/
+├── docs/                 # contracts, assumptions, operations, generated OpenAPI
+│   └── decisions/        # accepted architectural decisions (ADRs)
+├── specs/                # change proposals, approved before implementation
+├── migrations/           # ordered SQL, applied by one runner per release
 ├── src/
-│   ├── api/
-│   ├── comments/
-│   ├── platforms/
-│   ├── shared/
-│   └── index.ts
+│   ├── api/              # Fastify routes, schemas, error mapping
+│   ├── comments/         # domain contracts and application use cases
+│   ├── platforms/        # provider adapters behind one interface
+│   ├── repositories/     # in-memory and PostgreSQL persistence
+│   └── shared/           # identity, cursors, errors, observability ports
 ├── tests/
-└── .github/
+└── docker-compose.yml    # PostgreSQL, migrate and seed, then the service
 ```
 
-The source tree contains domain contracts, application use cases, the adaptive provider boundary, deterministic in-memory adapters, Fastify routes, tests, and PostgreSQL migration artifacts. No live social provider SDK is selected.
+Dependencies point inward: `api` and `repositories` depend on `comments`, never the reverse, and nothing in `comments` imports Fastify, `pg`, or a logging library.
 
 ## Development workflow
 

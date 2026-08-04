@@ -81,7 +81,7 @@ The PostgreSQL repository is now exercised against a real database. Running it s
 ### Documentation
 
 - [x] Replace README AI usage placeholder with honest account of tool contributions and review process.
-- [ ] Add "Design decisions" section to README: modular monolith, provider abstraction, cache-as-snapshot, idempotent replies, tenant isolation + ADR links.
+- [x] Add a "Design decisions" section to the README: seven decisions with their costs, what was deliberately not built, and links to the governing ADRs and specs.
 - [ ] Research and populate provider capability matrix (YouTube, Facebook Graph, LinkedIn, Instagram, X) with real API capability findings.
 - [x] Verify api-design.md alignment: limit defaults (25), max (100), header-only auth, error code mappings (500 → INTERNAL_ERROR).
 
