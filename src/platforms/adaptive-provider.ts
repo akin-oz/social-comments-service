@@ -4,9 +4,9 @@ import { validateNormalizedComment } from '../shared/validation.js';
 import {
   callProvider,
   noopLogger,
-  providerRetryPolicy,
+  providerRetryPolicies,
   type Logger,
-  type RetryPolicy,
+  type ProviderRetryPolicies,
 } from '../shared/observability.js';
 import { toFailureCode } from '../shared/errors.js';
 import type { Comment, NormalizedComment, Platform, PublishedPost } from '../shared/types.js';
@@ -58,7 +58,7 @@ export class AdaptiveProviderAdapter implements AdaptiveProvider {
     public readonly platform: Platform,
     private readonly client: ProviderClient,
     public readonly capabilities: ReadonlySet<ProviderCapability>,
-    private readonly policy: RetryPolicy = providerRetryPolicy,
+    private readonly policies: ProviderRetryPolicies = providerRetryPolicies,
     private readonly logger: Logger = noopLogger,
   ) {}
 
@@ -70,7 +70,7 @@ export class AdaptiveProviderAdapter implements AdaptiveProvider {
           ...(query.providerCursor === undefined ? {} : { cursor: query.providerCursor }),
           limit: query.limit,
         }),
-      this.policy,
+      this.policies.read,
       (error, delayMs) => this.logRetry('list_comments', error, delayMs),
     );
     if (page.hasMore && page.nextCursor === null) {
@@ -93,7 +93,9 @@ export class AdaptiveProviderAdapter implements AdaptiveProvider {
           externalCommentId: command.parentExternalCommentId,
           body: command.body,
         }),
-      this.policy,
+      // Writes use the non-replaying policy: a timed-out publish may have
+      // succeeded, so a retry here would duplicate a real reply.
+      this.policies.write,
       (error, delayMs) => this.logRetry('reply_to_comment', error, delayMs),
     );
     return this.toNormalized(item, command.post, command.parentExternalCommentId);

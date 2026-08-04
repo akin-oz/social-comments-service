@@ -15,7 +15,7 @@ import {
 import { ProviderRateLimitError, ServiceError } from '../../src/shared/errors.js';
 import { internalCommentId } from '../../src/shared/identity.js';
 import type { ProviderCapability } from '../../src/comments/contracts.js';
-import { noopMetrics, type RetryPolicy } from '../../src/shared/observability.js';
+import { noopMetrics, providerPolicies, type RetryPolicy } from '../../src/shared/observability.js';
 import { externalComment, post, RecordingLogger, tenant } from '../support/fixtures.js';
 
 const immediatePolicy: RetryPolicy = {
@@ -72,7 +72,7 @@ function buildService(options: Harness = {}) {
     post.platform,
     client,
     new Set(options.capabilities ?? ['list_comments', 'reply_to_comment']),
-    immediatePolicy,
+    providerPolicies(immediatePolicy),
   );
   const comments = new InMemoryCommentRepository([], tenant.accountId);
   const operations = new InMemoryReplyOperationRepository();

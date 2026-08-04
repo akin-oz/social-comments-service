@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { AdaptiveProviderAdapter } from '../../src/platforms/adaptive-provider.js';
 import { FixtureProviderClient } from '../../src/platforms/fixture-provider.js';
 import { internalCommentId } from '../../src/shared/identity.js';
-import { ProviderError } from '../../src/shared/errors.js';
+import { ProviderError, ProviderUnavailableError } from '../../src/shared/errors.js';
+import { providerPolicies, providerRetryPolicy } from '../../src/shared/observability.js';
 import { externalComment, post } from '../support/fixtures.js';
 
 function adapter(client: ConstructorParameters<typeof AdaptiveProviderAdapter>[1]) {
@@ -109,6 +110,63 @@ describe('adaptive provider adapter', () => {
 
     expect(page.hasMore).toBe(true);
     expect(page.nextProviderCursor).toEqual(expect.any(String));
+  });
+
+  it('never republishes a reply whose outcome is unknown', async () => {
+    // A timeout does not prove the provider rejected the request. Replaying it
+    // publishes a second reply under someone else's name — the duplication the
+    // idempotency design exists to prevent. Against a shared retry policy this
+    // asserted 3.
+    let published = 0;
+    const provider = new AdaptiveProviderAdapter(
+      'instagram',
+      {
+        listComments: async () => ({ items: [], nextCursor: null, hasMore: false }),
+        replyToComment: async (command) => {
+          published += 1;
+          // Accepted and published, but slower than the call budget.
+          await new Promise((resolve) => setTimeout(resolve, 60));
+          return {
+            externalId: `published-${published}`,
+            authorId: 'account-author',
+            authorName: 'Blotato',
+            body: command.body,
+            publishedAt: '2026-08-02T12:00:00.000Z',
+            updatedAt: '2026-08-02T12:00:00.000Z',
+          };
+        },
+      },
+      new Set(['reply_to_comment']),
+      providerPolicies({ ...providerRetryPolicy, timeoutMs: 10, baseDelayMs: 1, maxDelayMs: 2 }),
+    );
+
+    await expect(
+      provider.replyToComment({ post, parentExternalCommentId: 'ig-comment-1', body: 'Thanks!' }),
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
+
+    expect(published).toBe(1);
+  });
+
+  it('still retries a read, because refetching a page is safe', async () => {
+    let attempts = 0;
+    const provider = new AdaptiveProviderAdapter(
+      'instagram',
+      {
+        listComments: async () => {
+          attempts += 1;
+          if (attempts === 1) throw new ProviderUnavailableError('temporarily down');
+          return { items: [], nextCursor: null, hasMore: false };
+        },
+        replyToComment: async () => {
+          throw new Error('not used');
+        },
+      },
+      new Set(['list_comments']),
+      providerPolicies({ ...providerRetryPolicy, timeoutMs: 500, baseDelayMs: 1, maxDelayMs: 2 }),
+    );
+
+    await expect(provider.listComments({ post, limit: 10 })).resolves.toMatchObject({ items: [] });
+    expect(attempts).toBe(2);
   });
 
   it('rejects a provider page that claims more results without a cursor', async () => {

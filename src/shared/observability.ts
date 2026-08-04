@@ -145,3 +145,28 @@ export const providerRetryPolicy: RetryPolicy = {
     return false;
   },
 };
+
+/**
+ * Reads and writes cannot share a retry policy.
+ *
+ * A read is safe to replay: fetching the same provider page twice converges on
+ * the same rows through the upsert. A write is not. A timeout does not prove
+ * the provider rejected the request — it proves only that no answer arrived —
+ * so replaying one can publish a second reply under someone else's name, which
+ * is precisely the duplication the idempotency design exists to prevent.
+ */
+export interface ProviderRetryPolicies {
+  read: RetryPolicy;
+  write: RetryPolicy;
+}
+
+/**
+ * Pairs a read policy with a write policy that never replays an ambiguous
+ * failure. Rate limits are still retried, because a rate-limited call is one
+ * the provider refused: refusal is proof the request was not accepted.
+ */
+export function providerPolicies(read: RetryPolicy): ProviderRetryPolicies {
+  return { read, write: { ...read, shouldRetry: () => false } };
+}
+
+export const providerRetryPolicies: ProviderRetryPolicies = providerPolicies(providerRetryPolicy);
