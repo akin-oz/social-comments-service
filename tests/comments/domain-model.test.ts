@@ -5,6 +5,7 @@ import {
   isPlatform,
   validateComment,
   validateListCommentsQuery,
+  validateNormalizedComment,
   validatePagination,
   validateReplyToCommentCommand,
 } from '../../src/shared/validation.js';
@@ -69,6 +70,27 @@ describe('comment domain model', () => {
         limit: 0,
       }),
     ).toThrowError('positive integer limit');
+  });
+
+  it('requires a complete keyset when a position is supplied', () => {
+    const query = { postId: comment.postId, platform: comment.platform, limit: 25 };
+    expect(() =>
+      validateListCommentsQuery({
+        ...query,
+        after: { publishedAt: comment.publishedAt, id: comment.id },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateListCommentsQuery({ ...query, after: { publishedAt: '', id: comment.id } }),
+    ).toThrowError('complete keyset');
+  });
+
+  it('requires provider identifiers on a normalized comment', () => {
+    const record = { comment, externalId: 'ig-comment-1', externalParentCommentId: null };
+    expect(() => validateNormalizedComment(record)).not.toThrow();
+    expect(() => validateNormalizedComment({ ...record, externalId: ' ' })).toThrowError(
+      'provider identifiers',
+    );
   });
 
   it('requires an idempotency key for replies', () => {

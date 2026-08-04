@@ -1,14 +1,16 @@
 import { ServiceError } from '../shared/errors.js';
-import type { AdaptiveProvider } from '../comments/contracts.js';
+import type {
+  AdaptiveProvider,
+  PlatformProviderRegistry,
+  ProviderCapability,
+} from '../comments/contracts.js';
 import type { Platform } from '../shared/types.js';
+
+export type { PlatformProviderRegistry };
 
 /**
  * Resolves adapters without exposing provider SDKs to application code.
  */
-export interface PlatformProviderRegistry {
-  get(platform: Platform): AdaptiveProvider;
-}
-
 export class InMemoryPlatformProviderRegistry implements PlatformProviderRegistry {
   public constructor(private readonly providers: ReadonlyMap<Platform, AdaptiveProvider>) {}
 
@@ -27,7 +29,7 @@ export class InMemoryPlatformProviderRegistry implements PlatformProviderRegistr
 
 export function requireCapability(
   provider: AdaptiveProvider,
-  capability: 'list_comments' | 'reply_to_comment',
+  capability: ProviderCapability,
 ): void {
   if (!provider.capabilities.has(capability)) {
     throw new ServiceError(

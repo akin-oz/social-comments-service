@@ -1,4 +1,11 @@
-import type { Comment, ExternalAuthor, Pagination, Platform } from './types.js';
+import type {
+  Comment,
+  CommentKeyset,
+  ExternalAuthor,
+  NormalizedComment,
+  Pagination,
+  Platform,
+} from './types.js';
 import type { ListCommentsQuery, ReplyToCommentCommand } from '../comments/contracts.js';
 
 export type DomainValidationCode =
@@ -41,6 +48,19 @@ export function validateComment(comment: Comment): void {
   }
 }
 
+export function validateNormalizedComment(record: NormalizedComment): void {
+  validateComment(record.comment);
+  if (
+    !isNonEmptyString(record.externalId) ||
+    !isNullableNonEmptyString(record.externalParentCommentId)
+  ) {
+    throw new DomainValidationError(
+      'INVALID_COMMENT',
+      'A normalized comment must retain the provider identifiers used for deduplication.',
+    );
+  }
+}
+
 export function validatePagination(pagination: Pagination): void {
   if (
     typeof pagination.hasMore !== 'boolean' ||
@@ -58,13 +78,13 @@ export function validateListCommentsQuery(query: ListCommentsQuery): void {
   if (
     !isNonEmptyString(query.postId) ||
     !isPlatform(query.platform) ||
-    !isNullableNonEmptyString(query.cursor) ||
+    !isValidKeyset(query.after) ||
     !Number.isInteger(query.limit) ||
     query.limit < 1
   ) {
     throw new DomainValidationError(
       'INVALID_LIST_COMMENTS_QUERY',
-      'A comment query requires a post, supported platform, positive integer limit, and opaque cursor when provided.',
+      'A comment query requires a post, supported platform, positive integer limit, and complete keyset when provided.',
     );
   }
 }
@@ -80,6 +100,11 @@ export function validateReplyToCommentCommand(command: ReplyToCommentCommand): v
       'A reply command requires a comment ID, non-empty body, and idempotency key.',
     );
   }
+}
+
+function isValidKeyset(keyset: CommentKeyset | undefined): boolean {
+  if (keyset === undefined) return true;
+  return isNonEmptyString(keyset.publishedAt) && isNonEmptyString(keyset.id);
 }
 
 function isValidAuthor(author: ExternalAuthor): boolean {

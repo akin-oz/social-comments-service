@@ -27,6 +27,23 @@ export interface Comment {
   updatedAt: string;
 }
 
+/**
+ * A comment plus the provider identity used to deduplicate it. Provider
+ * identifiers stay out of {@link Comment} so they are never serialized to
+ * API clients (ADR-0010).
+ */
+export interface NormalizedComment {
+  comment: Comment;
+  externalId: string;
+  externalParentCommentId: string | null;
+}
+
+/** Ordering position used for keyset pagination (Spec-009). */
+export interface CommentKeyset {
+  publishedAt: string;
+  id: string;
+}
+
 export interface TenantContext {
   accountId: AccountId;
 }
