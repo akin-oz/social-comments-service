@@ -16,6 +16,11 @@ agents:
   - readiness-test-integrity
   - readiness-security
   - readiness-reviewer-experience
+  - review-principal-architect
+  - review-reliability
+  - review-domain-model
+  - review-api-contract
+  - review-data-model
 
 rules:
   - engineering

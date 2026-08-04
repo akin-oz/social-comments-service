@@ -64,19 +64,25 @@ The initialization skeleton is not an approval to implement the comment system. 
 
 Invoke by name; full definitions are in `.claude/agents/`.
 
-| Agent                           | Model  | Purpose                                                                                                                                                       |
-| ------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `architecture-guardian`         | opus   | Read-only review of boundaries, dependency direction, and spec/ADR governance.                                                                                |
-| `contract-guardian`             | sonnet | Read-only audit for invented API, database, provider, and domain contracts.                                                                                   |
-| `readiness-claim-auditor`       | sonnet | Pre-delivery documentation reviewer — is every claim in the README, docs, specs, and ADRs true of the code as it stands? Read-only.                           |
-| `readiness-fresh-clone`         | sonnet | Pre-delivery release reviewer — would a clean clone install, build, test, and run, by both the pnpm and Docker paths? Read-only.                              |
-| `readiness-reviewer-experience` | sonnet | Pre-delivery reviewer-experience investigator — does the repository answer the assignment brief in the first fifteen minutes, without overstating? Read-only. |
-| `readiness-security`            | opus   | Pre-delivery security reviewer — tenant isolation actually enforced, no secrets committed, nothing sensitive in logs or responses. Read-only.                 |
-| `readiness-test-integrity`      | opus   | Pre-delivery test reviewer — would these tests fail if the code were wrong? Hunts assertions that cannot fail and modules nothing executes. Read-only.        |
-| `spec-author`                   | opus   | Drafts an approval-ready implementation specification without implementing it.                                                                                |
+| Agent                           | Model  | Purpose                                                                                                                                                             |
+| ------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `architecture-guardian`         | opus   | Read-only review of boundaries, dependency direction, and spec/ADR governance.                                                                                      |
+| `contract-guardian`             | sonnet | Read-only audit for invented API, database, provider, and domain contracts.                                                                                         |
+| `readiness-claim-auditor`       | sonnet | Pre-delivery documentation reviewer — is every claim in the README, docs, specs, and ADRs true of the code as it stands? Read-only.                                 |
+| `readiness-fresh-clone`         | sonnet | Pre-delivery release reviewer — would a clean clone install, build, test, and run, by both the pnpm and Docker paths? Read-only.                                    |
+| `readiness-reviewer-experience` | sonnet | Pre-delivery reviewer-experience investigator — does the repository answer the assignment brief in the first fifteen minutes, without overstating? Read-only.       |
+| `readiness-security`            | opus   | Pre-delivery security reviewer — tenant isolation actually enforced, no secrets committed, nothing sensitive in logs or responses. Read-only.                       |
+| `readiness-test-integrity`      | opus   | Pre-delivery test reviewer — would these tests fail if the code were wrong? Hunts assertions that cannot fail and modules nothing executes. Read-only.              |
+| `review-api-contract`           | sonnet | REST contract critique from the consumer's side — ergonomics, error semantics, pagination, and whether it can evolve without breaking clients. Read-only.           |
+| `review-data-model`             | sonnet | Schema and query critique — keys, constraints, indexes against real query shapes, migration safety, and behaviour as data grows. Read-only.                         |
+| `review-domain-model`           | sonnet | Domain modelling critique — do the types say what the business means, and what can the model not express? Read-only.                                                |
+| `review-principal-architect`    | opus   | Principal-level design critique — is this the right design, do the abstractions earn their keep, is the machinery proportionate to the problem? Read-only.          |
+| `review-reliability`            | opus   | Failure-mode critique — what happens under partial failure, concurrency, provider misbehaviour, and retry? Judges idempotency and consistency semantics. Read-only. |
+| `spec-author`                   | opus   | Drafts an approval-ready implementation specification without implementing it.                                                                                      |
 
 ## Agent teams
 
 Read-only task forces run at a milestone rather than continuously. Each directory holds a launch prompt and seed tasks.
 
 - `delivery-readiness` — `.claude/agent-teams/delivery-readiness/launch.md`
+- `principal-review` — `.claude/agent-teams/principal-review/launch.md`
