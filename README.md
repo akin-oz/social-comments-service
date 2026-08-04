@@ -67,6 +67,28 @@ pnpm format:check
 pnpm test
 ```
 
+## Running the service
+
+```bash
+pnpm dev
+```
+
+No live provider or database is selected, so the runnable composition uses the deterministic fixture provider and in-memory repositories. The comment snapshot starts empty, so the first read exercises provider-backed hydration rather than seeded data.
+
+```bash
+curl 'http://localhost:3000/v2/posts/2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b002/comments?limit=2' -H 'X-Account-Id: 2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b001'
+```
+
+That returns two comments and a `nextCursor`. Passing the cursor back returns the remaining page; replying uses a comment ID from the response:
+
+```bash
+curl -X POST 'http://localhost:3000/v2/comments/beb5d133-e54d-5998-91d0-25f49f24aa7e/replies' -H 'X-Account-Id: 2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b001' -H 'Idempotency-Key: demo-1' -H 'Content-Type: application/json' -d '{"body":"Thank you!"}'
+```
+
+Repeating that request with the same key returns the same reply instead of publishing a second one.
+
+## Contribution workflow
+
 The expected workflow is:
 
 1. Update the relevant plan or assumption before changing design-sensitive behavior.

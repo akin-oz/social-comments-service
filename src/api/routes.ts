@@ -1,9 +1,12 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { DomainValidationError } from '../shared/validation.js';
-import { ServiceError } from '../shared/errors.js';
+import { ProviderRateLimitError, ServiceError } from '../shared/errors.js';
 import type { CommentService } from '../comments/comment-service.js';
-import type { TenantContext } from '../shared/types.js';
+import type { Comment, TenantContext } from '../shared/types.js';
+
+const DEFAULT_LIMIT = 25;
+const MAX_LIMIT = 100;
 
 interface ListParams {
   postId: string;
@@ -26,8 +29,27 @@ interface RequestWithContext extends FastifyRequest {
   requestContext: TenantContext;
 }
 
+/** Explicit projection so internal fields can never reach an API client. */
+function serializeComment(comment: Comment) {
+  return {
+    id: comment.id,
+    postId: comment.postId,
+    platform: comment.platform,
+    author: {
+      id: comment.author.id,
+      displayName: comment.author.displayName,
+      ...(comment.author.profileUrl === undefined ? {} : { profileUrl: comment.author.profileUrl }),
+    },
+    body: comment.body,
+    parentCommentId: comment.parentCommentId,
+    publishedAt: comment.publishedAt,
+    updatedAt: comment.updatedAt,
+  };
+}
+
 export function registerCommentRoutes(app: FastifyInstance, service: CommentService): void {
   app.addHook('onRequest', async (request: FastifyRequest, reply) => {
+    if (request.url === '/health') return;
     const accountId = request.headers['x-account-id'];
     if (typeof accountId !== 'string' || accountId.trim() === '') {
       return reply
@@ -50,20 +72,22 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
           type: 'object',
           additionalProperties: false,
           properties: {
-            limit: { type: 'integer', minimum: 1, maximum: 100 },
-            cursor: { type: 'string' },
+            limit: { type: 'integer', minimum: 1, maximum: MAX_LIMIT },
+            cursor: { type: 'string', minLength: 1 },
           },
         },
       },
     },
     async (request: FastifyRequest<{ Params: ListParams; Querystring: ListQuery }>, reply) => {
-      const query = request.query;
+      const { limit, cursor } = request.query;
       const result = await service.listComments(
         (request as RequestWithContext).requestContext,
         request.params.postId,
-        { limit: query.limit ?? 25, ...(query.cursor ? { cursor: query.cursor } : {}) },
+        { limit: limit ?? DEFAULT_LIMIT, ...(cursor === undefined ? {} : { cursor }) },
       );
-      return reply.code(200).send({ data: result.items, pagination: result.pagination });
+      return reply
+        .code(200)
+        .send({ data: result.items.map(serializeComment), pagination: result.pagination });
     },
   );
 
@@ -98,7 +122,7 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
         request.body.body,
         idempotencyKey,
       );
-      return reply.code(201).send({ data: result });
+      return reply.code(201).send({ data: serializeComment(result) });
     },
   );
 
@@ -112,6 +136,7 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
       return reply.code(400).send(errorResponse('INVALID_REQUEST', error.message, request.id));
     }
     if (error instanceof ServiceError) {
+      applyRetryAfter(reply, error);
       return reply
         .code(error.statusCode)
         .send(errorResponse(error.code, error.message, request.id));
@@ -119,8 +144,14 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
     request.log.error({ err: error }, 'unhandled request error');
     return reply
       .code(500)
-      .send(errorResponse('PROVIDER_ERROR', 'The request could not be completed.', request.id));
+      .send(errorResponse('INTERNAL_ERROR', 'The request could not be completed.', request.id));
   });
+}
+
+function applyRetryAfter(reply: FastifyReply, error: ServiceError): void {
+  if (error instanceof ProviderRateLimitError && error.retryAfterMs !== null) {
+    reply.header('retry-after', String(Math.ceil(error.retryAfterMs / 1000)));
+  }
 }
 
 function errorResponse(code: string, message: string, requestId: string) {

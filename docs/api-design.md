@@ -4,25 +4,32 @@ The API is versioned from the start because provider integrations and normalized
 
 Base path: `/v2`
 
+## Authentication
+
+Per assumption A-001 the surrounding platform authenticates callers and supplies the tenant context. This service reads that context from the `X-Account-Id` request header and scopes every query to it; a request without it is rejected with `UNAUTHENTICATED`.
+
+The header is trusted because it is expected to arrive from an internal gateway that has already authenticated the caller. Exposing this service directly to untrusted clients would require a real credential check in front of it; that boundary belongs to the platform, not to the comment service.
+
 ## GET `/v2/posts/{postId}/comments`
 
 Retrieves comments for a published post.
 
 ### Query parameters
 
-| Parameter | Required | Description                                                                      |
-| --------- | -------- | -------------------------------------------------------------------------------- |
-| `limit`   | No       | Number of comments requested. Default and maximum are implementation-configured. |
-| `cursor`  | No       | Opaque cursor returned by a previous response.                                   |
+| Parameter | Required | Description                                                       |
+| --------- | -------- | ----------------------------------------------------------------- |
+| `limit`   | No       | Number of comments requested. Defaults to `25`, maximum is `100`. |
+| `cursor`  | No       | Opaque cursor returned by a previous response.                    |
 
 The post’s platform is resolved from the authenticated account and post record. Provider-specific IDs are not exposed as query parameters.
+
+The service answers from its local snapshot of the post’s comments. When the snapshot cannot satisfy the requested position, it fetches that page from the provider, stores it, and serves the result. A repeated request is therefore served locally without further provider traffic.
 
 ### Request
 
 ```http
-GET /v2/posts/post_123/comments?limit=25 HTTP/1.1
-Authorization: Bearer <token>
-X-Account-Id: account_123
+GET /v2/posts/2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b002/comments?limit=25 HTTP/1.1
+X-Account-Id: 2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b001
 ```
 
 ### Response: `200 OK`
@@ -31,11 +38,11 @@ X-Account-Id: account_123
 {
   "data": [
     {
-      "id": "comment_456",
-      "postId": "post_123",
+      "id": "beb5d133-e54d-5998-91d0-25f49f24aa7e",
+      "postId": "2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b002",
       "platform": "instagram",
       "author": {
-        "id": "author_789",
+        "id": "ig-author-1",
         "displayName": "Ada Lovelace",
         "profileUrl": "https://example.test/ada"
       },
@@ -46,11 +53,13 @@ X-Account-Id: account_123
     }
   ],
   "pagination": {
-    "nextCursor": "eyJvZmZzZXQiOjI1fQ",
+    "nextCursor": "eyJhIjpbIjIwMjYtMDgtMDFUMTA6MDA6MDAuMDAwWiIsImJlYjVkMTMzLWU1NGQtNTk5OC05MWQwLTI1ZjQ5ZjI0YWE3ZSJdLCJwIjoiTWcifQ",
     "hasMore": true
   }
 }
 ```
+
+Comment and post identifiers are service-owned UUIDs (ADR-0010). The provider’s own identifiers are stored for deduplication but are never serialized to clients. `author.id` remains the provider’s author identifier, because the author is not a resource this service owns.
 
 ## POST `/v2/comments/{commentId}/replies`
 
@@ -63,9 +72,8 @@ Publishes a reply to an existing comment.
 ### Request
 
 ```http
-POST /v2/comments/comment_456/replies HTTP/1.1
-Authorization: Bearer <token>
-X-Account-Id: account_123
+POST /v2/comments/beb5d133-e54d-5998-91d0-25f49f24aa7e/replies HTTP/1.1
+X-Account-Id: 2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b001
 Idempotency-Key: reply-request-01
 Content-Type: application/json
 
@@ -79,20 +87,22 @@ Content-Type: application/json
 ```json
 {
   "data": {
-    "id": "comment_999",
-    "postId": "post_123",
+    "id": "923a391e-d474-543c-9dcc-a1645f29c28e",
+    "postId": "2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b002",
     "platform": "instagram",
     "author": {
-      "id": "account_123",
+      "id": "fixture-account",
       "displayName": "Blotato"
     },
     "body": "Thank you!",
-    "parentCommentId": "comment_456",
+    "parentCommentId": "beb5d133-e54d-5998-91d0-25f49f24aa7e",
     "publishedAt": "2026-08-02T12:00:00.000Z",
     "updatedAt": "2026-08-02T12:00:00.000Z"
   }
 }
 ```
+
+Replying requires the parent comment to be present in the local snapshot, which listing the post’s comments guarantees. An identifier the service has never issued is answered with `COMMENT_NOT_FOUND` rather than a guess at provider coordinates.
 
 ## Error responses
 
@@ -116,12 +126,21 @@ Expected mappings include:
 | `401`  | `UNAUTHENTICATED`                     | Caller credentials are missing or invalid.       |
 | `403`  | `FORBIDDEN`                           | Caller cannot access the account or post.        |
 | `404`  | `POST_NOT_FOUND`, `COMMENT_NOT_FOUND` | Resource is not visible in the caller’s scope.   |
-| `409`  | `IDEMPOTENCY_CONFLICT`                | Key was reused for a different request.          |
+| `409`  | `IDEMPOTENCY_CONFLICT`                | The idempotency key cannot be honoured.          |
 | `422`  | `UNSUPPORTED_CAPABILITY`              | Provider cannot perform the requested operation. |
 | `429`  | `PROVIDER_RATE_LIMITED`               | Provider or service rate limit was reached.      |
 | `502`  | `PROVIDER_ERROR`                      | Provider returned an upstream failure.           |
 | `503`  | `PROVIDER_UNAVAILABLE`                | Provider is temporarily unavailable.             |
+| `500`  | `INTERNAL_ERROR`                      | Unexpected failure inside the service.           |
+
+A `429` response carries `Retry-After` whenever the provider supplied that guidance.
+
+`IDEMPOTENCY_CONFLICT` covers three cases, distinguished by the message: the key was reused for a different request body, a reply for the key is still in flight, or the key already failed. A failed key is terminal, because the outcome at the provider may be unknown; the client retries with a new key.
 
 ## Pagination strategy
 
-Responses use opaque cursors. The service owns the cursor format and may encode provider cursors, a local snapshot boundary, or both. Clients must not decode or construct cursors. Ordering should be deterministic, and the implementation must document how new comments arriving during pagination are handled.
+Responses use opaque cursors. Clients must not decode or construct them; a cursor the service did not issue is rejected with `INVALID_CURSOR`.
+
+A cursor encodes two things: the caller’s keyset position in the local snapshot, expressed as the last returned `(publishedAt, id)` pair, and the provider’s own continuation token when one is outstanding. Ordering is `(publishedAt, id)` ascending, which matches the `comments (account_id, post_id, published_at, id)` index.
+
+Because the position is a keyset rather than an offset, a comment that arrives before the caller’s position does not shift the remaining pages: the caller sees neither duplicates nor gaps. Such a comment simply is not part of that pagination run and appears on a subsequent first-page request.
