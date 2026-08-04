@@ -5,7 +5,6 @@ import type {
   Comment,
   NormalizedComment,
   Platform,
-  PublishedPost,
   ReplyOperation,
   ReplyOperationStatus,
   TenantContext,
@@ -15,6 +14,8 @@ import type {
   CommentRepository,
   ListCommentsQuery,
   PostRepository,
+  PostSnapshotState,
+  PublishedPostRecord,
   ReplyOperationClaim,
   ReplyOperationRepository,
 } from '../comments/contracts.js';
@@ -38,6 +39,8 @@ interface PostRow {
   platform: Platform;
   external_post_id: string;
   published_at: string;
+  provider_cursor: string | null;
+  provider_exhausted: boolean;
 }
 
 interface OperationRow {
@@ -109,25 +112,45 @@ export class PostgresPostRepository implements PostRepository {
   public async findPublishedById(
     context: TenantContext,
     postId: string,
-  ): Promise<PublishedPost | null> {
+  ): Promise<PublishedPostRecord | null> {
     return this.db.withTenant(context.accountId, async (tx) => {
       const result = await tx.query<PostRow>(
-        `select p.id, p.account_id, sa.platform, p.external_post_id, p.published_at
+        `select p.id, p.account_id, sa.platform, p.external_post_id, p.published_at,
+                p.provider_cursor, p.provider_exhausted
          from posts p
          join social_accounts sa on sa.id = p.social_account_id
          where p.id = $1 and p.account_id = $2 and p.status = 'published'`,
         [postId, context.accountId],
       );
       const row = result.rows[0];
-      return row
-        ? {
-            id: row.id,
-            accountId: row.account_id,
-            platform: row.platform,
-            externalPostId: row.external_post_id,
-            publishedAt: new Date(row.published_at).toISOString(),
-          }
-        : null;
+      if (!row) return null;
+      return {
+        post: {
+          id: row.id,
+          accountId: row.account_id,
+          platform: row.platform,
+          externalPostId: row.external_post_id,
+          publishedAt: new Date(row.published_at).toISOString(),
+        },
+        snapshot: {
+          providerCursor: row.provider_cursor,
+          exhausted: row.provider_exhausted,
+        },
+      };
+    });
+  }
+
+  public async saveSnapshotState(
+    context: TenantContext,
+    postId: string,
+    state: PostSnapshotState,
+  ): Promise<void> {
+    await this.db.withTenant(context.accountId, async (tx) => {
+      await tx.query(
+        `update posts set provider_cursor = $1, provider_exhausted = $2
+         where id = $3 and account_id = $4`,
+        [state.providerCursor, state.exhausted, postId, context.accountId],
+      );
     });
   }
 }

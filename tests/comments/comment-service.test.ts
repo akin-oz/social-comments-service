@@ -145,6 +145,56 @@ describe('listing comments', () => {
     expect(client.listCalls).toBe(callsAfterHydration);
   });
 
+  it('reports the same hasMore when a caller restarts pagination', async () => {
+    // The reported defect: the first request hydrated one page and advertised
+    // more, and an identical second request answered from the snapshot and
+    // claimed the post was complete.
+    const { service, client } = buildService({ maxPageSize: 2 });
+
+    const first = await service.listComments(tenant, post.id, { limit: 2 });
+    const second = await service.listComments(tenant, post.id, { limit: 2 });
+
+    expect(first.pagination.hasMore).toBe(true);
+    expect(second.pagination.hasMore).toBe(true);
+    expect(second.items.map((item) => item.id)).toEqual(first.items.map((item) => item.id));
+    // Answering correctly costs no extra provider traffic here.
+    expect(client.listCalls).toBe(1);
+  });
+
+  it('reports no more results once the provider stream is exhausted', async () => {
+    const { service, client } = buildService({ maxPageSize: 2 });
+
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const page = await service.listComments(tenant, post.id, {
+        limit: 2,
+        ...(cursor === null ? {} : { cursor }),
+      });
+      cursor = page.pagination.nextCursor;
+      pages += 1;
+    } while (cursor !== null && pages < 10);
+
+    // Having read the post through, a fresh first page must not claim more.
+    const callsAfterWalk = client.listCalls;
+    const restart = await service.listComments(tenant, post.id, { limit: 50 });
+
+    expect(restart.items).toHaveLength(3);
+    expect(restart.pagination.hasMore).toBe(false);
+    expect(client.listCalls).toBe(callsAfterWalk);
+  });
+
+  it('does not re-ask the provider for a post shorter than the requested limit', async () => {
+    const { service, client } = buildService();
+
+    const first = await service.listComments(tenant, post.id, { limit: 25 });
+    const second = await service.listComments(tenant, post.id, { limit: 25 });
+
+    expect(first.pagination.hasMore).toBe(false);
+    expect(second.pagination.hasMore).toBe(false);
+    expect(client.listCalls).toBe(1);
+  });
+
   it('rejects a cursor the service did not issue', async () => {
     const { service } = buildService();
 

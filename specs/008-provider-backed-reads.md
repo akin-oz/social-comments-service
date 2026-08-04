@@ -106,6 +106,8 @@ Approval requires confirmation:
 
 ## Implementation outcome
 
+**Acceptance criterion 2 was superseded by Spec-013.** It required a repeat request to be served from the cache "without calling the provider again", and implementing that literally meant hydration fired only on an empty page. A post whose provider stream is longer than one page then reported `hasMore: false` to any caller that did not carry a cursor, understating how many comments it had. Hydration now fires on an incomplete page while the stream is not exhausted, so a repeat request may call the provider until the snapshot for that post is complete. The intent of the criterion survives: a fully synchronised post costs no provider traffic.
+
 Acceptance criteria 1, 2, 4, and 5 are implemented as written, and the open decisions were resolved as proposed.
 
 Acceptance criterion 3 could not be implemented as written, and this section records what was built instead. Under ADR-0010 a comment identifier is an opaque service-owned UUID derived by one-way hash, so a bare identifier that is absent from the snapshot cannot be translated back into the provider coordinates (post plus external comment id) needed to fetch it. The "fetch the comment from the provider" branch has no reachable input.

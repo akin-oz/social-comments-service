@@ -45,8 +45,33 @@ export interface CommentRepository {
   ): Promise<readonly Comment[]>;
 }
 
+/**
+ * How much of a post's provider comment stream has been read into the local
+ * snapshot (Spec-013).
+ *
+ * Without this, the service forgets what hydration learned and cannot tell an
+ * exhausted provider from one it has simply never asked, so a caller starting
+ * pagination fresh is told a post has fewer comments than it does.
+ */
+export interface PostSnapshotState {
+  /** Continuation for the next unfetched provider page. */
+  providerCursor: string | null;
+  /** True once the provider stream has been read to its end. */
+  exhausted: boolean;
+}
+
+export interface PublishedPostRecord {
+  post: PublishedPost;
+  snapshot: PostSnapshotState;
+}
+
 export interface PostRepository {
-  findPublishedById(context: TenantContext, postId: string): Promise<PublishedPost | null>;
+  findPublishedById(context: TenantContext, postId: string): Promise<PublishedPostRecord | null>;
+  saveSnapshotState(
+    context: TenantContext,
+    postId: string,
+    state: PostSnapshotState,
+  ): Promise<void>;
 }
 
 /**

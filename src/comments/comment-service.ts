@@ -21,6 +21,7 @@ import type {
   ListCommentsResult,
   PlatformProviderRegistry,
   PostRepository,
+  PostSnapshotState,
   ReplyOperationRepository,
   ReplyToCommentCommand,
 } from './contracts.js';
@@ -49,8 +50,9 @@ export class CommentService {
     postId: string,
     request: ListCommentsRequest,
   ): Promise<ListCommentsResult> {
-    const post = await this.posts.findPublishedById(context, postId);
-    if (!post) throw new NotFoundError('POST_NOT_FOUND', 'The requested post was not found.');
+    const found = await this.posts.findPublishedById(context, postId);
+    if (!found) throw new NotFoundError('POST_NOT_FOUND', 'The requested post was not found.');
+    const { post, snapshot } = found;
 
     const cursor = decodeCursor(request.cursor);
     const query: ListCommentsQuery = {
@@ -64,17 +66,25 @@ export class CommentService {
     const startedAt = Date.now();
     try {
       let page = await this.comments.listByPost(context, query);
-      let providerCursor = cursor.providerCursor;
+      let providerCursor = snapshot.providerCursor;
+      let exhausted = snapshot.exhausted;
 
-      const upstreamMayHaveMore = cursor.after === null || cursor.providerCursor !== null;
-      const hydrated = page.items.length === 0 && upstreamMayHaveMore;
+      // Hydrate whenever the snapshot cannot fill the page and the provider
+      // stream has not been read to its end. Triggering on an empty page
+      // instead would leave a partly-synchronised post reporting no further
+      // results to any caller that did not carry a cursor (Spec-013).
+      const hydrated = page.items.length < request.limit && !exhausted;
       if (hydrated) {
-        providerCursor = await this.hydrate(context, post, providerCursor, request.limit);
+        const fetched = await this.hydrate(context, post, providerCursor, request.limit);
+        providerCursor = fetched.providerCursor;
+        exhausted = fetched.exhausted;
+        await this.posts.saveSnapshotState(context, postId, { providerCursor, exhausted });
         page = await this.comments.listByPost(context, query);
       }
 
       const last = page.items[page.items.length - 1];
-      const hasMore = last !== undefined && (page.hasMore || providerCursor !== null);
+      // Completeness of the snapshot decides this, never the caller's cursor.
+      const hasMore = last !== undefined && (page.hasMore || !exhausted);
       const pagination = {
         hasMore,
         nextCursor: hasMore
@@ -139,10 +149,11 @@ export class CommentService {
     if (!comment) {
       throw new NotFoundError('COMMENT_NOT_FOUND', 'The requested comment was not found.');
     }
-    const post = await this.posts.findPublishedById(context, comment.postId);
-    if (!post) {
+    const postRecord = await this.posts.findPublishedById(context, comment.postId);
+    if (!postRecord) {
       throw new NotFoundError('POST_NOT_FOUND', 'The post for this comment was not found.');
     }
+    const post = postRecord.post;
     const parentExternalCommentId = await this.comments.resolveExternalId(context, commentId);
     if (parentExternalCommentId === null) {
       throw new NotFoundError('COMMENT_NOT_FOUND', 'The requested comment was not found.');
@@ -222,12 +233,18 @@ export class CommentService {
     }
   }
 
+  /**
+   * Reads one provider page into the snapshot and reports how far the stream
+   * has been consumed. One page per request keeps a single read from making an
+   * unbounded number of provider calls, so a page may come back shorter than
+   * the requested limit while more remains upstream.
+   */
   private async hydrate(
     context: RequestContext,
     post: PublishedPost,
     providerCursor: string | null,
     limit: number,
-  ): Promise<string | null> {
+  ): Promise<PostSnapshotState> {
     const provider = this.providers.get(post.platform);
     requireCapability(provider, 'list_comments');
     const startedAt = Date.now();
@@ -246,7 +263,9 @@ export class CommentService {
       hasMore: page.hasMore,
       durationMs: Date.now() - startedAt,
     });
-    return page.hasMore ? page.nextProviderCursor : null;
+    return page.hasMore
+      ? { providerCursor: page.nextProviderCursor, exhausted: false }
+      : { providerCursor: null, exhausted: true };
   }
 
   private trace(context: RequestContext): LogFields {

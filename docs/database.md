@@ -92,6 +92,14 @@ erDiagram
   }
 ```
 
+## Snapshot completeness
+
+`posts` carries `provider_cursor` and `provider_exhausted` (Spec-013). Together they record how much of a post's provider comment stream has been read into the local snapshot: the continuation for the next unfetched page, and whether the end has been reached.
+
+Without them the service could not distinguish an exhausted provider from one it had never asked, because that knowledge lived only inside a cursor handed to one client. A caller starting pagination fresh was then told a post held fewer comments than it did.
+
+The service is granted `update` on just these two columns; everything else about a post remains read-only to it.
+
 ## Constraints to validate during implementation
 
 - Treat `account_id` as the tenant boundary for all account-owned entities and scope every query to it.

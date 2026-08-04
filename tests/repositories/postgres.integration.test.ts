@@ -88,10 +88,40 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
 
   it('resolves a published post for its own tenant only', async () => {
     await expect(posts.findPublishedById(contextA, tenantA.postId)).resolves.toMatchObject({
-      id: tenantA.postId,
-      externalPostId: tenantA.externalPostId,
+      post: { id: tenantA.postId, externalPostId: tenantA.externalPostId },
+      snapshot: { exhausted: expect.any(Boolean) },
     });
     await expect(posts.findPublishedById(contextA, tenantB.postId)).resolves.toBeNull();
+  });
+
+  it('round-trips the snapshot state a read depends on', async () => {
+    await posts.saveSnapshotState(contextA, tenantA.postId, {
+      providerCursor: 'provider-page-2',
+      exhausted: false,
+    });
+    await expect(posts.findPublishedById(contextA, tenantA.postId)).resolves.toMatchObject({
+      snapshot: { providerCursor: 'provider-page-2', exhausted: false },
+    });
+
+    await posts.saveSnapshotState(contextA, tenantA.postId, {
+      providerCursor: null,
+      exhausted: true,
+    });
+    await expect(posts.findPublishedById(contextA, tenantA.postId)).resolves.toMatchObject({
+      snapshot: { providerCursor: null, exhausted: true },
+    });
+  });
+
+  it('cannot advance another tenant snapshot state', async () => {
+    const before = await posts.findPublishedById(contextB, tenantB.postId);
+    // Row-level security makes this update match nothing rather than fail loudly.
+    await posts.saveSnapshotState(contextA, tenantB.postId, {
+      providerCursor: 'forged',
+      exhausted: true,
+    });
+    const after = await posts.findPublishedById(contextB, tenantB.postId);
+
+    expect(after?.snapshot).toEqual(before?.snapshot);
   });
 
   it('returns comments in keyset order and pages without repeating', async () => {

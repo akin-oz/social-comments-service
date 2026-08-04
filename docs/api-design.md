@@ -36,7 +36,9 @@ Retrieves comments for a published post.
 
 The post’s platform is resolved from the authenticated account and post record. Provider-specific IDs are not exposed as query parameters.
 
-The service answers from its local snapshot of the post’s comments. When the snapshot cannot satisfy the requested position, it fetches that page from the provider, stores it, and serves the result. A repeated request is therefore served locally without further provider traffic.
+The service answers from its local snapshot of the post’s comments. When the snapshot cannot fill the requested page and the provider stream has not been read to its end, it fetches the next page from the provider, stores it, and serves the result. Once a post has been read through, further requests are served locally with no provider traffic.
+
+One provider page is fetched per request, so a response may contain fewer comments than `limit` while `hasMore` is still `true`. `hasMore` reflects whether more comments exist, not whether this response filled the page.
 
 ### Request
 

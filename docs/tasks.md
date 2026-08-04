@@ -74,7 +74,7 @@ The PostgreSQL repository is now exercised against a real database. Running it s
 
 ## Known defects
 
-- [ ] **A fresh first-page request under-reports `hasMore` after a partial hydration.** Listing a post hydrates one provider page and reports `hasMore: true` with a cursor. A later request for the first page, with no cursor, finds those rows in the snapshot, so it never hydrates, and the local page has no further rows and no provider continuation. It answers `hasMore: false` with a null cursor, telling the caller the post has fewer comments than it does. A client following the issued cursor is unaffected; a client restarting pagination, which is what a polling client does, is not. The cause is that Spec-008 triggers hydration on an _empty_ page rather than an _incomplete_ one, so fixing it changes read semantics and needs its own spec. Reproduce with `pnpm dev`: request `?limit=2` twice and compare `pagination.hasMore`.
+- [x] **A fresh first-page request under-reported `hasMore` after a partial hydration.** A caller that restarted pagination was told a post held fewer comments than it did, because hydration fired only on an empty page and `hasMore` was derived from whatever cursor the caller happened to supply. Fixed under Spec-013: a post now records how much of its provider stream has been read, hydration fires on an incomplete page while the stream is not exhausted, and `hasMore` comes from snapshot completeness. Verified against PostgreSQL, and the regression tests fail against the previous logic.
 
 ## Milestone 10: Submission readiness
 

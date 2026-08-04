@@ -12,6 +12,8 @@ import type {
   CommentRepository,
   ListCommentsQuery,
   PostRepository,
+  PostSnapshotState,
+  PublishedPostRecord,
   ReplyOperationClaim,
   ReplyOperationRepository,
 } from '../comments/contracts.js';
@@ -91,6 +93,7 @@ export class InMemoryCommentRepository implements CommentRepository {
 
 export class InMemoryPostRepository implements PostRepository {
   private readonly posts = new Map<string, PublishedPost>();
+  private readonly snapshots = new Map<string, PostSnapshotState>();
 
   public constructor(seed: readonly PublishedPost[] = []) {
     for (const post of seed) this.posts.set(post.id, post);
@@ -99,9 +102,24 @@ export class InMemoryPostRepository implements PostRepository {
   public async findPublishedById(
     context: TenantContext,
     postId: string,
-  ): Promise<PublishedPost | null> {
+  ): Promise<PublishedPostRecord | null> {
     const post = this.posts.get(postId);
-    return post?.accountId === context.accountId ? post : null;
+    if (post?.accountId !== context.accountId) return null;
+    // An unseen post has read nothing of its provider stream, so it is not
+    // exhausted and the first read hydrates.
+    const snapshot = this.snapshots.get(scopedKey(context.accountId, postId)) ?? {
+      providerCursor: null,
+      exhausted: false,
+    };
+    return { post, snapshot };
+  }
+
+  public async saveSnapshotState(
+    context: TenantContext,
+    postId: string,
+    state: PostSnapshotState,
+  ): Promise<void> {
+    this.snapshots.set(scopedKey(context.accountId, postId), state);
   }
 }
 
