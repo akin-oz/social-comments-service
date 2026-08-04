@@ -5,68 +5,126 @@ import {
   InMemoryPostRepository,
   InMemoryReplyOperationRepository,
 } from '../../src/repositories/in-memory.js';
-import type { Comment, PublishedPost } from '../../src/shared/types.js';
+import { normalizedComment, otherTenant, post, tenant } from '../support/fixtures.js';
 
-const context = { accountId: 'account-1' };
-const post: PublishedPost = {
-  id: 'post-1',
-  accountId: 'account-1',
-  platform: 'instagram',
-  externalPostId: 'external-post-1',
-  publishedAt: '2026-08-01T10:00:00.000Z',
-};
-const comment = (id: string): Comment => ({
-  id,
-  postId: post.id,
-  platform: post.platform,
-  author: { id: `author-${id}`, displayName: 'Ada' },
-  body: id,
-  parentCommentId: null,
-  publishedAt: `2026-08-01T10:00:0${id.slice(-1)}.000Z`,
-  updatedAt: '2026-08-01T10:00:00.000Z',
-});
+const first = normalizedComment('ig-comment-1', '2026-08-01T10:00:00.000Z');
+const second = normalizedComment('ig-comment-2', '2026-08-01T11:00:00.000Z');
+const third = normalizedComment('ig-comment-3', '2026-08-01T12:00:00.000Z');
 
-describe('in-memory repository contracts', () => {
-  it('scopes post and comment reads to the tenant and uses deterministic cursors', async () => {
-    const comments = new InMemoryCommentRepository([comment('comment-1'), comment('comment-2')]);
+function repository() {
+  return new InMemoryCommentRepository([first, second, third], tenant.accountId);
+}
+
+const listQuery = { postId: post.id, platform: post.platform } as const;
+
+describe('in-memory comment repository', () => {
+  it('scopes reads to the tenant', async () => {
+    const comments = repository();
     const posts = new InMemoryPostRepository([post]);
 
-    await expect(posts.findPublishedById({ accountId: 'other' }, post.id)).resolves.toBeNull();
-    await expect(
-      comments.listByPost(context, { postId: post.id, platform: post.platform, limit: 1 }),
-    ).resolves.toMatchObject({
-      items: [expect.objectContaining({ id: 'comment-1' })],
-      pagination: { hasMore: true, nextCursor: expect.any(String) },
+    await expect(posts.findPublishedById(otherTenant, post.id)).resolves.toBeNull();
+    await expect(comments.listByPost(otherTenant, { ...listQuery, limit: 10 })).resolves.toEqual({
+      items: [],
+      hasMore: false,
     });
-    await expect(
-      comments.listByPost(
-        { accountId: 'other' },
-        { postId: post.id, platform: post.platform, limit: 10 },
-      ),
-    ).resolves.toMatchObject({ items: [] });
   });
 
-  it('deduplicates reply operations by account and idempotency key', async () => {
+  it('walks pages in keyset order without repeating or skipping', async () => {
+    const comments = repository();
+
+    const page1 = await comments.listByPost(tenant, { ...listQuery, limit: 2 });
+    expect(page1.items.map((item) => item.id)).toEqual([first.comment.id, second.comment.id]);
+    expect(page1.hasMore).toBe(true);
+
+    const page2 = await comments.listByPost(tenant, {
+      ...listQuery,
+      limit: 2,
+      after: { publishedAt: second.comment.publishedAt, id: second.comment.id },
+    });
+    expect(page2.items.map((item) => item.id)).toEqual([third.comment.id]);
+    expect(page2.hasMore).toBe(false);
+  });
+
+  it('keeps an issued position stable when an earlier comment arrives later', async () => {
+    const comments = repository();
+    const after = { publishedAt: first.comment.publishedAt, id: first.comment.id };
+
+    // An offset cursor would shift here; a keyset cursor must not.
+    await comments.upsertMany(tenant, [
+      normalizedComment('ig-comment-0', '2026-08-01T09:00:00.000Z'),
+    ]);
+
+    const page = await comments.listByPost(tenant, { ...listQuery, limit: 10, after });
+    expect(page.items.map((item) => item.id)).toEqual([second.comment.id, third.comment.id]);
+  });
+
+  it('deduplicates a provider comment observed twice', async () => {
+    const comments = repository();
+
+    await comments.upsertMany(tenant, [
+      normalizedComment('ig-comment-1', '2026-08-01T10:00:00.000Z'),
+    ]);
+
+    const page = await comments.listByPost(tenant, { ...listQuery, limit: 10 });
+    expect(page.items).toHaveLength(3);
+  });
+
+  it('resolves the provider identifier for a stored comment', async () => {
+    const comments = repository();
+
+    await expect(comments.resolveExternalId(tenant, first.comment.id)).resolves.toBe(
+      'ig-comment-1',
+    );
+    await expect(comments.resolveExternalId(otherTenant, first.comment.id)).resolves.toBeNull();
+  });
+});
+
+describe('in-memory reply operation repository', () => {
+  const operation = {
+    id: 'operation-1',
+    commentId: first.comment.id,
+    idempotencyKey: 'request-1',
+    requestFingerprint: `${first.comment.id}:reply`,
+    status: 'pending' as const,
+    resultingCommentId: null,
+    failureCode: null,
+    createdAt: '2026-08-01T10:00:00.000Z',
+    completedAt: null,
+  };
+
+  it('grants the key to exactly one caller', async () => {
     const operations = new InMemoryReplyOperationRepository();
-    const input = {
-      id: 'operation-1',
-      commentId: 'comment-1',
-      idempotencyKey: 'request-1',
-      requestFingerprint: 'comment-1:reply',
-      status: 'pending' as const,
-      resultingCommentId: null,
-      failureCode: null,
-      createdAt: '2026-08-01T10:00:00.000Z',
-      completedAt: null,
-    };
-    await operations.createPending(context, input);
-    await expect(
-      operations.createPending(context, { ...input, id: 'operation-2' }),
-    ).resolves.toMatchObject({
-      id: 'operation-1',
+
+    await expect(operations.claim(tenant, operation)).resolves.toMatchObject({
+      claimed: true,
+      operation: { id: 'operation-1' },
     });
     await expect(
-      operations.findByIdempotencyKey({ accountId: 'other' }, 'request-1'),
-    ).resolves.toBeNull();
+      operations.claim(tenant, { ...operation, id: 'operation-2' }),
+    ).resolves.toMatchObject({ claimed: false, operation: { id: 'operation-1' } });
+  });
+
+  it('scopes idempotency keys to the tenant', async () => {
+    const operations = new InMemoryReplyOperationRepository();
+    await operations.claim(tenant, operation);
+
+    await expect(operations.findByIdempotencyKey(otherTenant, 'request-1')).resolves.toBeNull();
+    await expect(operations.claim(otherTenant, operation)).resolves.toMatchObject({
+      claimed: true,
+    });
+  });
+
+  it('records terminal outcomes with a completion timestamp', async () => {
+    const operations = new InMemoryReplyOperationRepository();
+    await operations.claim(tenant, operation);
+
+    await expect(operations.complete(tenant, 'operation-1', 'comment-9')).resolves.toMatchObject({
+      status: 'completed',
+      resultingCommentId: 'comment-9',
+      completedAt: expect.any(String),
+    });
+    await expect(
+      operations.fail(tenant, 'operation-1', 'PROVIDER_RATE_LIMITED'),
+    ).resolves.toMatchObject({ status: 'failed', failureCode: 'PROVIDER_RATE_LIMITED' });
   });
 });

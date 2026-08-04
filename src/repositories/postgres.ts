@@ -1,12 +1,21 @@
+import { internalCommentId } from '../shared/identity.js';
+import { ServiceError } from '../shared/errors.js';
 import type {
+  Comment,
+  NormalizedComment,
+  Platform,
+  PublishedPost,
+  ReplyOperation,
+  TenantContext,
+} from '../shared/types.js';
+import type {
+  CommentPage,
   CommentRepository,
   ListCommentsQuery,
-  ListCommentsResult,
   PostRepository,
+  ReplyOperationClaim,
   ReplyOperationRepository,
 } from '../comments/contracts.js';
-import type { Comment, PublishedPost, ReplyOperation, TenantContext } from '../shared/types.js';
-import { ServiceError } from '../shared/errors.js';
 
 export interface SqlResult<Row> {
   rows: Row[];
@@ -26,10 +35,11 @@ export interface TransactionalSqlExecutor extends SqlExecutor {
 interface CommentRow {
   id: string;
   post_id: string;
-  platform: Comment['platform'];
+  platform: Platform;
   author_external_id: string;
   author_display_name: string;
   body: string;
+  external_comment_id: string;
   external_parent_comment_id: string | null;
   published_at: string;
   updated_at: string;
@@ -38,23 +48,18 @@ interface CommentRow {
 interface PostRow {
   id: string;
   account_id: string;
-  platform: PublishedPost['platform'];
+  platform: Platform;
   external_post_id: string;
   published_at: string;
 }
 
 type OperationRow = ReplyOperation;
 
-const encodeCursor = (offset: number): string =>
-  Buffer.from(String(offset), 'utf8').toString('base64url');
+const commentColumns = `c.id, c.post_id, p.platform, c.author_external_id, c.author_display_name,
+         c.body, c.external_comment_id, c.external_parent_comment_id, c.published_at, c.updated_at`;
 
-function decodeCursor(cursor: string | undefined): number {
-  if (!cursor) return 0;
-  const offset = Number.parseInt(Buffer.from(cursor, 'base64url').toString('utf8'), 10);
-  if (!Number.isInteger(offset) || offset < 0)
-    throw new ServiceError('INVALID_REQUEST', 'The cursor is invalid.', 400);
-  return offset;
-}
+const operationColumns = `id, account_id, comment_id, idempotency_key, request_fingerprint, status,
+         resulting_comment_id, failure_code, created_at, completed_at`;
 
 function toComment(row: CommentRow): Comment {
   return {
@@ -63,7 +68,10 @@ function toComment(row: CommentRow): Comment {
     platform: row.platform,
     author: { id: row.author_external_id, displayName: row.author_display_name },
     body: row.body,
-    parentCommentId: row.external_parent_comment_id,
+    parentCommentId:
+      row.external_parent_comment_id === null
+        ? null
+        : internalCommentId(row.platform, row.external_parent_comment_id),
     publishedAt: new Date(row.published_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
@@ -97,32 +105,32 @@ export class PostgresPostRepository implements PostRepository {
 export class PostgresCommentRepository implements CommentRepository {
   public constructor(private readonly db: SqlExecutor) {}
 
-  public async listByPost(
-    context: TenantContext,
-    query: ListCommentsQuery,
-  ): Promise<ListCommentsResult> {
-    const offset = decodeCursor(query.cursor);
+  public async listByPost(context: TenantContext, query: ListCommentsQuery): Promise<CommentPage> {
+    // One extra row decides `hasMore` without a second count query.
     const result = await this.db.query<CommentRow>(
-      `select c.id, c.post_id, p.platform, c.author_external_id, c.author_display_name,
-              c.body, c.external_parent_comment_id, c.published_at, c.updated_at
+      `select ${commentColumns}
        from comments c join posts p on p.id = c.post_id
        where c.account_id = $1 and c.post_id = $2 and p.platform = $3
+         and ($4::timestamptz is null
+              or (c.published_at, c.id) > ($4::timestamptz, $5::uuid))
        order by c.published_at asc, c.id asc
-       limit $4 offset $5`,
-      [context.accountId, query.postId, query.platform, query.limit + 1, offset],
+       limit $6`,
+      [
+        context.accountId,
+        query.postId,
+        query.platform,
+        query.after?.publishedAt ?? null,
+        query.after?.id ?? null,
+        query.limit + 1,
+      ],
     );
-    const rows = result.rows.slice(0, query.limit);
     const hasMore = result.rows.length > query.limit;
-    return {
-      items: rows.map(toComment),
-      pagination: { hasMore, nextCursor: hasMore ? encodeCursor(offset + query.limit) : null },
-    };
+    return { items: result.rows.slice(0, query.limit).map(toComment), hasMore };
   }
 
   public async findById(context: TenantContext, commentId: string): Promise<Comment | null> {
     const result = await this.db.query<CommentRow>(
-      `select c.id, c.post_id, p.platform, c.author_external_id, c.author_display_name,
-              c.body, c.external_parent_comment_id, c.published_at, c.updated_at
+      `select ${commentColumns}
        from comments c join posts p on p.id = c.post_id
        where c.id = $1 and c.account_id = $2`,
       [commentId, context.accountId],
@@ -131,8 +139,31 @@ export class PostgresCommentRepository implements CommentRepository {
     return row ? toComment(row) : null;
   }
 
-  public async upsert(context: TenantContext, comment: Comment): Promise<Comment> {
-    const result = await this.db.query<CommentRow>(
+  public async resolveExternalId(
+    context: TenantContext,
+    commentId: string,
+  ): Promise<string | null> {
+    const result = await this.db.query<{ external_comment_id: string }>(
+      `select external_comment_id from comments where id = $1 and account_id = $2`,
+      [commentId, context.accountId],
+    );
+    return result.rows[0]?.external_comment_id ?? null;
+  }
+
+  public async upsertMany(
+    context: TenantContext,
+    records: readonly NormalizedComment[],
+  ): Promise<readonly Comment[]> {
+    const stored: Comment[] = [];
+    for (const record of records) {
+      stored.push(await this.upsert(context, record));
+    }
+    return stored;
+  }
+
+  private async upsert(context: TenantContext, record: NormalizedComment): Promise<Comment> {
+    const { comment } = record;
+    const result = await this.db.query<{ id: string }>(
       `insert into comments
          (id, account_id, post_id, social_account_id, external_comment_id,
           external_parent_comment_id, author_external_id, author_display_name,
@@ -140,17 +171,17 @@ export class PostgresCommentRepository implements CommentRepository {
        select $1, $2, p.id, p.social_account_id, $3, $4, $5, $6, $7, $8, $9
        from posts p where p.id = $10 and p.account_id = $2
        on conflict (social_account_id, external_comment_id) do update set
-         body = excluded.body, author_display_name = excluded.author_display_name,
+         body = excluded.body,
+         author_display_name = excluded.author_display_name,
          external_parent_comment_id = excluded.external_parent_comment_id,
-         updated_at = excluded.updated_at, last_seen_at = now()
-       returning id, post_id, (select platform from posts where id = post_id) as platform,
-         author_external_id, author_display_name, body, external_parent_comment_id,
-         published_at, updated_at`,
+         updated_at = excluded.updated_at,
+         last_seen_at = now()
+       returning id`,
       [
         comment.id,
         context.accountId,
-        comment.id,
-        comment.parentCommentId,
+        record.externalId,
+        record.externalParentCommentId,
         comment.author.id,
         comment.author.displayName,
         comment.body,
@@ -159,9 +190,10 @@ export class PostgresCommentRepository implements CommentRepository {
         comment.postId,
       ],
     );
-    const row = result.rows[0];
-    if (!row) throw new ServiceError('POST_NOT_FOUND', 'The comment post was not found.', 404);
-    return toComment(row);
+    if (!result.rows[0]) {
+      throw new ServiceError('POST_NOT_FOUND', 'The comment post was not found.', 404);
+    }
+    return comment;
   }
 }
 
@@ -173,26 +205,29 @@ export class PostgresReplyOperationRepository implements ReplyOperationRepositor
     key: string,
   ): Promise<ReplyOperation | null> {
     const result = await this.db.query<OperationRow>(
-      `select id, account_id, comment_id, idempotency_key, request_fingerprint, status,
-              resulting_comment_id, failure_code, created_at, completed_at
+      `select ${operationColumns}
        from reply_operations where account_id = $1 and idempotency_key = $2`,
       [context.accountId, key],
     );
     return result.rows[0] ?? null;
   }
 
-  public async createPending(
+  /**
+   * Inserts the operation, or reports that another caller already owns the key.
+   * `do nothing` makes the unique index the arbiter, so two concurrent requests
+   * cannot both proceed to the provider.
+   */
+  public async claim(
     context: TenantContext,
     operation: Omit<ReplyOperation, 'accountId'>,
-  ): Promise<ReplyOperation> {
+  ): Promise<ReplyOperationClaim> {
     const result = await this.db.query<OperationRow>(
       `insert into reply_operations
          (id, account_id, comment_id, idempotency_key, request_fingerprint, status,
           resulting_comment_id, failure_code, created_at, completed_at)
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       on conflict (account_id, idempotency_key) do update set id = reply_operations.id
-       returning id, account_id, comment_id, idempotency_key, request_fingerprint, status,
-         resulting_comment_id, failure_code, created_at, completed_at`,
+       on conflict (account_id, idempotency_key) do nothing
+       returning ${operationColumns}`,
       [
         operation.id,
         context.accountId,
@@ -206,10 +241,14 @@ export class PostgresReplyOperationRepository implements ReplyOperationRepositor
         operation.completedAt,
       ],
     );
-    const row = result.rows[0];
-    if (!row)
-      throw new ServiceError('INVALID_REQUEST', 'Reply operation could not be created.', 500);
-    return row;
+    const inserted = result.rows[0];
+    if (inserted) return { operation: inserted, claimed: true };
+
+    const existing = await this.findByIdempotencyKey(context, operation.idempotencyKey);
+    if (!existing) {
+      throw new ServiceError('INTERNAL_ERROR', 'Reply operation could not be claimed.', 500);
+    }
+    return { operation: existing, claimed: false };
   }
 
   public async complete(
@@ -230,7 +269,12 @@ export class PostgresReplyOperationRepository implements ReplyOperationRepositor
     operationId: string,
     failureCode: string,
   ): Promise<ReplyOperation> {
-    return this.update(context, operationId, [null, 'failed', failureCode, null]);
+    return this.update(context, operationId, [
+      null,
+      'failed',
+      failureCode,
+      new Date().toISOString(),
+    ]);
   }
 
   private async update(
@@ -242,12 +286,11 @@ export class PostgresReplyOperationRepository implements ReplyOperationRepositor
       `update reply_operations set resulting_comment_id = $1, status = $2,
          failure_code = $3, completed_at = $4
        where id = $5 and account_id = $6
-       returning id, account_id, comment_id, idempotency_key, request_fingerprint, status,
-         resulting_comment_id, failure_code, created_at, completed_at`,
+       returning ${operationColumns}`,
       [...values, operationId, context.accountId],
     );
     const row = result.rows[0];
-    if (!row) throw new ServiceError('INVALID_REQUEST', 'Reply operation was not found.', 500);
+    if (!row) throw new ServiceError('INTERNAL_ERROR', 'Reply operation was not found.', 500);
     return row;
   }
 }
