@@ -1,4 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import swagger from '@fastify/swagger';
+import swaggerUi from '@fastify/swagger-ui';
 
 import { registerCommentRoutes } from './api/routes.js';
 import { CommentService } from './comments/comment-service.js';
@@ -57,6 +59,49 @@ export interface ApplicationDependencies {
     | ((logger: Logger) => ReadonlyMap<Platform, AdaptiveProvider>);
   metrics?: Metrics;
   logger?: boolean;
+  /**
+   * Serves the OpenAPI document and Swagger UI. Defaults to enabled outside
+   * production: a service behind an internal gateway has no reason to publish
+   * its own schema (Spec-011).
+   */
+  apiDocs?: boolean;
+}
+
+/** The OpenAPI description shared by the served document and the generated file. */
+export const openApiDocument = {
+  // Name components after their schema $id instead of the positional default.
+  refResolver: {
+    buildLocalReference: (json: { $id?: string }, _base: unknown, _fragment: unknown, i: number) =>
+      json.$id ?? `def-${i}`,
+  },
+  openapi: {
+    openapi: '3.1.0',
+    info: {
+      title: 'Blotato Comments API',
+      description:
+        'Retrieve comments for a published post and reply to a comment, across multiple social platforms.',
+      version: '2.0.0',
+    },
+    tags: [{ name: 'comments', description: 'Comment retrieval and replies' }],
+    components: {
+      securitySchemes: {
+        accountContext: {
+          type: 'apiKey' as const,
+          name: 'X-Account-Id',
+          in: 'header' as const,
+          description:
+            'Tenant context supplied by the platform gateway that already authenticated the caller (assumption A-001).',
+        },
+      },
+    },
+    security: [{ accountContext: [] }],
+  },
+};
+
+function apiDocsEnabled(explicit: boolean | undefined): boolean {
+  if (explicit !== undefined) return explicit;
+  if (process.env.ENABLE_API_DOCS !== undefined) return process.env.ENABLE_API_DOCS !== 'false';
+  return process.env.NODE_ENV !== 'production';
 }
 
 export function createApplication(dependencies: ApplicationDependencies = {}): FastifyInstance {
@@ -96,8 +141,20 @@ export function createApplication(dependencies: ApplicationDependencies = {}): F
     logger,
   );
 
-  registerCommentRoutes(app, service);
-  app.get('/health', async () => ({ status: 'ok' }));
+  if (apiDocsEnabled(dependencies.apiDocs)) {
+    void app.register(swagger, openApiDocument);
+    void app.register(swaggerUi, { routePrefix: '/documentation' });
+    app.get('/openapi.json', { schema: { hide: true } }, async () => app.swagger());
+  }
+
+  // Routes go in a plugin so they are registered after the documentation
+  // plugins above; Fastify defers plugin bodies, and a route declared before
+  // the swagger plugin loads is never captured in the document.
+  void app.register(async (instance) => {
+    registerCommentRoutes(instance, service);
+  });
+
+  app.get('/health', { schema: { hide: true } }, async () => ({ status: 'ok' }));
   return app;
 }
 
@@ -143,7 +200,7 @@ const demoExternalComments: readonly ExternalCommentRecord[] = [
  * request exercises provider-backed hydration rather than seeded data.
  */
 export function createDemoApplication(
-  overrides: Pick<ApplicationDependencies, 'logger'> = {},
+  overrides: Pick<ApplicationDependencies, 'logger' | 'apiDocs'> = {},
 ): FastifyInstance {
   const client = new FixtureProviderClient({
     commentsByPost: new Map([[demoPost.externalPostId, demoExternalComments]]),

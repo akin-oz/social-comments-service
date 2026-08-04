@@ -87,6 +87,8 @@ curl -X POST 'http://localhost:3000/v2/comments/beb5d133-e54d-5998-91d0-25f49f24
 
 Repeating that request with the same key returns the same reply instead of publishing a second one.
 
+Interactive documentation is at [http://localhost:3000/documentation](http://localhost:3000/documentation), and the OpenAPI 3.1 document at `/openapi.json`. Both are generated from the route schemas rather than maintained by hand, and CI fails if the committed [docs/openapi.json](docs/openapi.json) no longer matches them. Use **Authorize** in the UI to supply the account header, then either operation can be executed against the fixture provider.
+
 ## Contribution workflow
 
 The expected workflow is:

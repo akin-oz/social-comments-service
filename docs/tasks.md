@@ -83,9 +83,9 @@ The Postgres repository is written against the approved schema but is still unex
 
 ### OpenAPI and contracts
 
-- [ ] Add OpenAPI spec generation from Fastify schemas (e.g., fastify-plugin-oas, @apidevtools/swagger-ui-express, or manual YAML export).
-- [ ] Sync api-design.md with generated OpenAPI to prevent drift.
-- [ ] Update auth example in api-design.md: clarify that Bearer token is shown for documentation; actual auth is X-Account-Id header only.
+- [x] Generate OpenAPI from the Fastify route schemas and serve Swagger UI (Spec-011).
+- [x] Commit the generated document and fail CI on drift.
+- [x] Clarify in api-design.md that authentication is the X-Account-Id header only.
 
 ### Final checks
 

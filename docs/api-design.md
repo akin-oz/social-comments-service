@@ -4,6 +4,19 @@ The API is versioned from the start because provider integrations and normalized
 
 Base path: `/v2`
 
+## Machine-readable contract
+
+`docs/openapi.json` is an OpenAPI 3.1 document generated from the Fastify route schemas (Spec-011), so it describes what the routes implement rather than what was intended. CI regenerates it and fails on any difference, which is what keeps this document and the code from drifting apart.
+
+This document remains authoritative for intent, rationale, and error semantics. The generated document is the machine-readable projection of the implementation. A disagreement between them is a defect in one of the two.
+
+| Path             | Purpose                      |
+| ---------------- | ---------------------------- |
+| `/documentation` | Swagger UI                   |
+| `/openapi.json`  | The OpenAPI document as JSON |
+
+Neither is versioned under `/v2`, because they describe the API rather than belong to it, and neither requires an account context. Both are served only when API documentation is enabled: `ENABLE_API_DOCS` controls it, defaulting to enabled outside production and disabled in production, because a service behind an internal gateway has no reason to publish its own schema.
+
 ## Authentication
 
 Per assumption A-001 the surrounding platform authenticates callers and supplies the tenant context. This service reads that context from the `X-Account-Id` request header and scopes every query to it; a request without it is rejected with `UNAUTHENTICATED`.

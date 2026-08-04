@@ -195,7 +195,7 @@ Make the repository answer the assignment brief directly, for a reviewer reading
 | AI usage disclosure replacing the README placeholder                   | Not started | Yes               |
 | "Design decisions" summary in the README linking to the ADRs           | Not started | Yes               |
 | Provider capability matrix populated from public API research          | Not started | No                |
-| OpenAPI generated from the Fastify schemas                             | Not started | No                |
+| OpenAPI generated from the Fastify schemas                             | Done        | —                 |
 
 ### Definition of done
 

@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { DomainValidationError } from '../shared/validation.js';
 import { ProviderRateLimitError, ServiceError } from '../shared/errors.js';
+import { errorResponses, sharedSchemas } from './schemas.js';
 import type { CommentService } from '../comments/comment-service.js';
 import type { Comment, RequestContext } from '../shared/types.js';
 
@@ -47,9 +48,25 @@ function serializeComment(comment: Comment) {
   };
 }
 
+/**
+ * Paths that carry no tenant data and therefore no account context: the process
+ * health probe and the API documentation (Spec-011).
+ */
+function isPublicPath(url: string): boolean {
+  const path = url.split('?')[0] ?? '';
+  return (
+    path === '/health' ||
+    path === '/openapi.json' ||
+    path === '/documentation' ||
+    path.startsWith('/documentation/')
+  );
+}
+
 export function registerCommentRoutes(app: FastifyInstance, service: CommentService): void {
+  for (const schema of sharedSchemas) app.addSchema(schema);
+
   app.addHook('onRequest', async (request: FastifyRequest, reply) => {
-    if (request.url === '/health') return;
+    if (isPublicPath(request.url)) return;
     const accountId = request.headers['x-account-id'];
     if (typeof accountId !== 'string' || accountId.trim() === '') {
       request.log.warn(
@@ -67,6 +84,11 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
     '/v2/posts/:postId/comments',
     {
       schema: {
+        operationId: 'listComments',
+        tags: ['comments'],
+        summary: 'Retrieve comments for a published post',
+        description:
+          'Answers from the local snapshot of the post, fetching a page from the provider when the snapshot cannot satisfy the requested position.',
         params: {
           type: 'object',
           required: ['postId'],
@@ -76,9 +98,32 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
           type: 'object',
           additionalProperties: false,
           properties: {
-            limit: { type: 'integer', minimum: 1, maximum: MAX_LIMIT },
-            cursor: { type: 'string', minLength: 1 },
+            limit: {
+              type: 'integer',
+              minimum: 1,
+              maximum: MAX_LIMIT,
+              default: DEFAULT_LIMIT,
+              description: 'Number of comments requested.',
+            },
+            cursor: {
+              type: 'string',
+              minLength: 1,
+              description: 'Opaque cursor from a previous response.',
+            },
           },
+        },
+        response: {
+          200: {
+            description: 'A page of comments.',
+            type: 'object',
+            required: ['data', 'pagination'],
+            additionalProperties: false,
+            properties: {
+              data: { type: 'array', items: { $ref: 'Comment#' } },
+              pagination: { $ref: 'Pagination#' },
+            },
+          },
+          ...errorResponses([400, 401, 404, 422, 429, 500, 502, 503]),
         },
       },
     },
@@ -99,6 +144,11 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
     '/v2/comments/:commentId/replies',
     {
       schema: {
+        operationId: 'replyToComment',
+        tags: ['comments'],
+        summary: 'Publish a reply to a comment',
+        description:
+          'Publishes a reply through the post provider. The idempotency key makes a retry safe: a repeated request returns the reply already published rather than publishing a second one.',
         params: {
           type: 'object',
           required: ['commentId'],
@@ -110,7 +160,26 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
           additionalProperties: false,
           properties: { body: { type: 'string', minLength: 1, maxLength: 10000 } },
         },
-        headers: { type: 'object', required: ['idempotency-key'] },
+        headers: {
+          type: 'object',
+          required: ['idempotency-key'],
+          properties: {
+            'idempotency-key': {
+              type: 'string',
+              description: 'Stable across retries of the same logical reply.',
+            },
+          },
+        },
+        response: {
+          201: {
+            description: 'The published reply.',
+            type: 'object',
+            required: ['data'],
+            additionalProperties: false,
+            properties: { data: { $ref: 'Comment#' } },
+          },
+          ...errorResponses([400, 401, 404, 409, 422, 429, 500, 502, 503]),
+        },
       },
     },
     async (request: FastifyRequest<{ Params: ReplyParams; Body: ReplyBody }>, reply) => {

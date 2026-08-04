@@ -15,12 +15,15 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings 0",
+    "openapi": "tsx src/openapi.ts",
     "start": "node dist/src/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fastify/swagger": "^9.8.1",
+    "@fastify/swagger-ui": "^6.1.1",
     "fastify": "^5.0.0"
   },
   "devDependencies": {

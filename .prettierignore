@@ -1,0 +1,5 @@
+# Generated artifacts belong to their generators, not to the formatter.
+# Reformatting them only creates churn the next time they are regenerated.
+pnpm-lock.yaml
+docs/openapi.json
+dist/

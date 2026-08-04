@@ -23,3 +23,7 @@ jobs:
       - run: pnpm lint
       - run: pnpm format:check
       - run: pnpm test
+      - name: Verify the OpenAPI document matches the route schemas
+        run: |
+          pnpm openapi
+          git diff --exit-code docs/openapi.json
