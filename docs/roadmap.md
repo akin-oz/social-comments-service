@@ -158,12 +158,14 @@ Make the core assignment requirements work end-to-end and close correctness gaps
 
 ### Deliverables
 
-- Spec 008: Provider-backed comment reads with cache-miss semantics and staleness policy.
-- ADR: Internal UUID identity with explicit external-ID mapping at adapter boundaries.
-- Keyset pagination using the existing `(post_id, published_at, id)` index instead of offset-based cursors.
-- Integration test harness with testcontainers to verify Postgres schema, RLS, uniqueness constraints, and cursor behavior.
-- Reply-path hardening: concurrent-request race condition documentation or fix, failure-code taxonomy alignment, provider timeouts and rate-limit-aware retry.
-- Fixture provider implementation for `createDemoApplication` so the service is runnable without external dependencies.
+| Deliverable                                                           | Spec / ADR | State       |
+| --------------------------------------------------------------------- | ---------- | ----------- |
+| Provider-backed reads with cache-miss hydration                       | Spec 008   | Done        |
+| Internal UUID identity with external-ID mapping at adapter boundaries | ADR 0010   | Done        |
+| Keyset pagination over the `(post_id, published_at, id)` index        | Spec 009   | Done        |
+| Reply-path hardening: timeouts, rate limits, idempotency claim        | Spec 010   | Done        |
+| Fixture provider so the service runs without external dependencies    | Spec 008   | Done        |
+| Testcontainers harness for Postgres schema, RLS, and constraints      | Spec 009   | Not started |
 
 ### Definition of done
 
@@ -171,24 +173,41 @@ Make the core assignment requirements work end-to-end and close correctness gaps
 
 ### Remaining
 
-Everything above is met except Postgres verification. `src/repositories/postgres.ts` is written against the approved schema but no harness executes it, so its SQL, the `(social_account_id, external_comment_id)` and `(account_id, idempotency_key)` constraints, and the row-level security policies are all unverified. Until the testcontainers harness in `docs/tasks.md` lands, the in-memory adapter is the only proven persistence path.
+Every criterion is met except Postgres verification. Both endpoints were exercised against a running server, and 58 tests cover the domain, cursor codec, provider adapter, retry policy, in-memory repositories, service, and API.
+
+`src/repositories/postgres.ts` is the one module no test executes. Its SQL, the `(social_account_id, external_comment_id)` and `(account_id, idempotency_key)` constraints, and the row-level security policies are all unverified, and every query in that file was rewritten under ADR-0010 and Spec-009. The in-memory adapter is the only proven persistence path; treat the PostgreSQL adapter as a reviewed design, not as working code.
+
+Two implementation outcomes diverge from the approved text and are recorded in the documents themselves: Spec-008 acceptance criterion 3 is unreachable under ADR-0010 identifiers, and ADR-0010's `findByExternalId` was dropped as having no caller.
 
 ## Milestone 10 — Submission readiness
 
-Status: Planned
+Status: In progress
 
 ### Goal
 
-Complete governance and documentation final pass for external review.
+Make the repository answer the assignment brief directly, for a reviewer reading it cold.
 
 ### Deliverables
 
-- Replace AI usage placeholder in README with honest account of what tools contributed and how work was reviewed.
-- Add "Design decisions" summary section to README linking the five core architectural choices to their ADRs.
-- Populate provider capability matrix with findings from public API research (YouTube, Facebook Graph, etc.).
-- OpenAPI spec generation from Fastify schemas to prevent documentation drift.
-- Contract alignment: HTTP 500 errors use `INTERNAL_ERROR` code per api-design.md, auth expectations documented explicitly.
+| Deliverable                                                            | State       | Blocks submission |
+| ---------------------------------------------------------------------- | ----------- | ----------------- |
+| Contract alignment: limits, header auth, `INTERNAL_ERROR`, cursor docs | Done        | —                 |
+| AI usage disclosure replacing the README placeholder                   | Not started | Yes               |
+| "Design decisions" summary in the README linking to the ADRs           | Not started | Yes               |
+| Provider capability matrix populated from public API research          | Not started | No                |
+| OpenAPI generated from the Fastify schemas                             | Not started | No                |
 
 ### Definition of done
 
-README clearly explains the reasoning, AI usage is transparent, provider matrix shows real platform research, and schema-sourced OpenAPI schema matches api-design.md.
+A reviewer can read the README and see what was built, which decisions were made and why, what was assumed, and how AI was used, without opening ten ADRs to assemble it.
+
+### Submission readiness
+
+The brief asks for four things: a database schema, an API design, relevant TypeScript code, and an explanation of major design decisions, plus a description of AI usage and documented assumptions.
+
+Schema, API design, and code are present and the two required operations work end to end. The gaps are in how the work is presented and in one verification hole:
+
+1. **AI usage is still a placeholder.** The brief asks for it explicitly, and this repository is visibly agent-assisted, so an empty disclosure is the worst available state.
+2. **The design explanation is spread across ten ADRs.** The reasoning exists but a reviewer has to assemble it. The brief says reasoning is what is being evaluated, so it should be readable from the README.
+3. **The PostgreSQL adapter is unverified.** The schema is a named deliverable and its adapter has never executed.
+4. **The capability matrix shows no platform research.** The abstraction's value is that providers differ; the matrix currently does not show where.

@@ -112,23 +112,39 @@ The detailed definition of done for each milestone is in [roadmap.md](docs/roadm
 
 ## AI usage disclosure
 
-> Placeholder: document which AI tools were used, what they contributed, and how generated work was reviewed before submission.
+The assignment permits AI tools and asks how they were used. They were used heavily: for research, drafting specifications, writing implementation code and tests, and keeping documentation aligned with the code. The agent configuration in this repository targets both Claude Code and Codex.
 
-AI assistance must remain subordinate to engineering judgment. Requirements, assumptions, design decisions, and verification should be reviewable by a human.
+The more useful answer is what the repository does about that. Assistants are fast at producing plausible code and unreliable at knowing when they are wrong, so this project treats agent output as a proposal that has to pass a gate, not as work that is finished when it compiles. The gate is machine-enforced and its history is in the repository, which means a reviewer can check the claim rather than take it on trust.
 
-## AI engineering governance
+### The rule agents work under
 
-The `.ai/` directory is the source of truth for agent rules, agents, hooks, and commands. Generated `CLAUDE.md`, `AGENTS.md`, `.claude/`, and `.codex/` outputs must not be edited directly.
+An agent may read anything, explain anything, and draft a proposal. It may not change business logic, an API, database, or provider contract, a dependency, or an architectural decision unless an approved specification under [specs/](specs/) covers the change. Specifications are created with `approved: no` in their front matter, and agents are forbidden from approving their own work. Only the maintainer flips that field. Architectural changes additionally require an ADR in [docs/decisions/](docs/decisions/), and every commit carries a `Spec: NNN` or `ADR: NNNN` trailer tying the change back to the decision that authorised it.
 
-Agents may inspect the repository and draft proposals, but they must not change business logic, API/database/provider contracts, dependencies, or architecture without an applicable human-approved spec under `specs/`. Architectural changes also require an ADR under `docs/decisions/`. Proposed specs begin with `approved: no`; agents are not allowed to approve them.
+The most recent milestone is a worked example. An assistant reviewed the codebase and reported that retrieving comments returned an empty list for every post because nothing ever populated the local snapshot, that comment identifiers could not be persisted at all because the adapter produced `platform:externalId` strings for `uuid` columns, and that the cursor implementation contradicted documented assumption A-008. It wrote those findings up as [specs 008 to 010](specs/) and [ADR-0010](docs/decisions/0010-identifier-mapping.md), all marked `approved: no`, and stopped. Nothing was implemented until those files were approved by hand.
+
+Two of the approved decisions turned out to be partly wrong once implemented. Spec-008 required fetching an uncached comment from its provider, which is impossible under ADR-0010's opaque derived identifiers because such an identifier carries no provider coordinates. ADR-0010 specified a `findByExternalId` repository method that no caller needed. Both are recorded as implementation outcomes in the documents themselves rather than quietly skipped, because a specification that silently diverges from the code is worse than no specification.
+
+### What the gate does not do
+
+It does not make the output correct. All three defects above survived every milestone up to the one that fixed them, including the milestones nominally covering tests and production polish, and none was caught by the quality gate: the suite was green throughout, because the tests exercised the same mistaken assumptions the code did. They were found by reading the code against its own documentation. What the gate buys is narrower and still worth having, that decisions are written down before code is written against them, that divergence between decision and implementation is visible, and that every claim in this section can be checked against `specs/`, `docs/decisions/`, and the commit history.
+
+Known limits are stated rather than smoothed over: the PostgreSQL adapter in [postgres.ts](src/repositories/postgres.ts) is reviewed but unverified, since no harness executes it, and [docs/roadmap.md](docs/roadmap.md) tracks that alongside the rest of the outstanding work.
+
+### AI Engineering OS
+
+The governance above is not hand-maintained per assistant. It is compiled by [AI Engineering OS](https://github.com/akin-oz/ai-engineering) (`@akinlabs/ai-engineering`), a separate open-source project of mine that exists because every assistant wants its instructions in a different place and format. Copying a few rules into `CLAUDE.md` and `AGENTS.md` is fine until the rules grow or a second assistant appears, at which point the copies drift and a reviewer has to check the same policy in several files.
+
+Instead, project intent lives once in [.ai/](.ai/) as a manifest, rules, agents, hooks, and commands, and the compiler generates the runtime artifacts for each target. This repository declares three rules, three agents, and both the Claude and Codex targets; `CLAUDE.md`, `AGENTS.md`, `.claude/`, and `.codex/` are all generated from that source and are never edited by hand.
 
 ```bash
-  pnpm ai:sync      # compile .ai/ into complete Claude and Codex outputs
-pnpm ai:validate  # validate the .ai/ workspace
+pnpm ai:sync      # compile .ai/ into the Claude and Codex runtime artifacts
+pnpm ai:validate  # validate the .ai/ workspace without generating output
 ```
 
-Commit hooks require a `Spec: NNN` or `ADR: NNNN` trailer and reject verification bypasses.
+CI runs `pnpm ai:validate` alongside typecheck, lint, formatting, and tests, so a drifted or invalid workspace fails the build like any other defect.
 
 ## Status
 
-Approved domain, platform, repository, API, testing, documentation, and production-polish specs are implemented to the extent supported without selecting a live provider or deployment vendor.
+All ten approved specifications are implemented. Retrieving comments for a published post and replying to a comment both work end to end against a provider, demonstrable with the commands above.
+
+Two things are deliberately not done. No live provider SDK is selected, so the runnable adapter is a deterministic fixture and the [capability matrix](docs/provider-capability-matrix.md) records no real platform research yet. The PostgreSQL adapter is written against the approved schema but no harness executes it, so it is a reviewed design rather than working code; the in-memory adapter is the only proven persistence path. [docs/roadmap.md](docs/roadmap.md) tracks both.
