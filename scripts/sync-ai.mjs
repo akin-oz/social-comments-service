@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { chmod, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -21,9 +22,27 @@ async function readMarkdownDirectory(directory) {
   );
 }
 
+/** Reads a single scalar out of a file's YAML front matter. */
+function frontMatterValue(content, key) {
+  const match = new RegExp(`^${key}:\\s*(.+)$`, 'm').exec(content.split('---')[1] ?? '');
+  return match?.[1]?.trim().replace(/^["']|["']$/g, '') ?? '';
+}
+
+/**
+ * Renders CLAUDE.md.
+ *
+ * Rules are inlined because they govern every session. Agents are listed
+ * rather than inlined: Claude Code loads their full definitions from
+ * `.claude/agents/` when one is invoked, so repeating the bodies here would
+ * spend context on every session to say the same thing twice. The Codex
+ * artifacts are produced by the compiler and still inline agents, which is
+ * the only way they are available to that runtime.
+ */
 async function renderRootInstructions(runtime) {
   const rules = await readMarkdownDirectory('.ai/rules');
   const agents = await readMarkdownDirectory('.ai/agents');
+  const teams = existsSync('.ai/agent-teams') ? (await readdir('.ai/agent-teams')).sort() : [];
+
   const sections = [
     `# Blotato Comments — ${runtime} Guide`,
     '',
@@ -34,8 +53,27 @@ async function renderRootInstructions(runtime) {
     ...rules.flatMap(({ name, content }) => [`### ${name}`, '', content, '']),
     '## Agents',
     '',
-    ...agents.flatMap(({ name, content }) => [`### ${name}`, '', content, '']),
+    'Invoke by name; full definitions are in `.claude/agents/`.',
+    '',
+    '| Agent | Model | Purpose |',
+    '| ----- | ----- | ------- |',
+    ...agents.map(
+      ({ name, content }) =>
+        `| \`${name}\` | ${frontMatterValue(content, 'model')} | ${frontMatterValue(content, 'description')} |`,
+    ),
   ];
+
+  if (teams.length > 0) {
+    sections.push(
+      '',
+      '## Agent teams',
+      '',
+      'Read-only task forces run at a milestone rather than continuously. Each directory holds a launch prompt and seed tasks.',
+      '',
+      ...teams.map((team) => `- \`${team}\` — \`.claude/agent-teams/${team}/launch.md\``),
+    );
+  }
+
   return generatedBanner(runtime.toLowerCase()) + sections.join('\n').trim() + '\n';
 }
 
@@ -59,6 +97,21 @@ async function generateRuntimeParityArtifacts() {
     'utf8',
   );
   await cp('.ai/templates/claude-settings.json', '.claude/settings.json');
+  await copyAgentTeams();
+}
+
+/**
+ * Agent teams are not a concept the compiler knows about, and the Claude
+ * adapter replaces `.claude/` wholesale, so anything it does not generate is
+ * lost on sync. Teams are therefore authored under `.ai/agent-teams/` like
+ * every other source of truth and copied through afterwards, the same way
+ * `.claude/settings.json` is.
+ */
+async function copyAgentTeams() {
+  const source = '.ai/agent-teams';
+  if (!existsSync(source)) return;
+  await rm('.claude/agent-teams', { recursive: true, force: true });
+  await cp(source, '.claude/agent-teams', { recursive: true });
 }
 
 await generateRuntimeParityArtifacts();

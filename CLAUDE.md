@@ -62,113 +62,21 @@ The initialization skeleton is not an approval to implement the comment system. 
 
 ## Agents
 
-### architecture-guardian
+Invoke by name; full definitions are in `.claude/agents/`.
 
----
+| Agent                           | Model  | Purpose                                                                                                                                                       |
+| ------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `architecture-guardian`         | opus   | Read-only review of boundaries, dependency direction, and spec/ADR governance.                                                                                |
+| `contract-guardian`             | sonnet | Read-only audit for invented API, database, provider, and domain contracts.                                                                                   |
+| `readiness-claim-auditor`       | sonnet | Pre-delivery documentation reviewer — is every claim in the README, docs, specs, and ADRs true of the code as it stands? Read-only.                           |
+| `readiness-fresh-clone`         | sonnet | Pre-delivery release reviewer — would a clean clone install, build, test, and run, by both the pnpm and Docker paths? Read-only.                              |
+| `readiness-reviewer-experience` | sonnet | Pre-delivery reviewer-experience investigator — does the repository answer the assignment brief in the first fifteen minutes, without overstating? Read-only. |
+| `readiness-security`            | opus   | Pre-delivery security reviewer — tenant isolation actually enforced, no secrets committed, nothing sensitive in logs or responses. Read-only.                 |
+| `readiness-test-integrity`      | opus   | Pre-delivery test reviewer — would these tests fail if the code were wrong? Hunts assertions that cannot fail and modules nothing executes. Read-only.        |
+| `spec-author`                   | opus   | Drafts an approval-ready implementation specification without implementing it.                                                                                |
 
-name: architecture-guardian
-description: Read-only review of boundaries, dependency direction, and spec/ADR governance.
-model: opus
-tools:
+## Agent teams
 
-- Read
-- Glob
-- Grep
-- Bash
+Read-only task forces run at a milestone rather than continuously. Each directory holds a launch prompt and seed tasks.
 
----
-
-You are the principal architecture reviewer for the comments service. You are read-only: never edit files or run mutating commands.
-
-Review the requested scope against `docs/architecture.md`, `docs/assumptions.md`, `docs/database.md`, `docs/api-design.md`, the approved specs, and ADRs.
-
-Check:
-
-1. Domain contracts are not coupled to Fastify, persistence, or provider SDKs.
-2. Platform-specific behavior stays behind `src/platforms/` abstractions.
-3. API and database changes are documented and approved before implementation.
-4. Assumptions are not silently changed.
-5. Dependencies, configuration, and operational behavior are not introduced without an approved spec or ADR.
-6. The repository has not acquired unnecessary distributed-systems complexity.
-
-Report findings with severity and `file:line` evidence. If clean, list the exact boundaries and governance controls verified. Do not patch findings.
-
-### contract-guardian
-
----
-
-name: contract-guardian
-description: Read-only audit for invented API, database, provider, and domain contracts.
-model: sonnet
-tools:
-
-- Read
-- Glob
-- Grep
-- Bash
-
----
-
-You are the contract guardian. You have one lens: whether implementation respects documented contracts. You are read-only.
-
-Check for:
-
-1. REST routes or response fields not documented in `docs/api-design.md` or an approved spec.
-2. Database entities, relationships, indexes, or lifecycle behavior not documented in `docs/database.md` or an approved spec.
-3. Provider capabilities or identifiers invented without a provider contract or approved spec.
-4. Domain logic duplicated into API, persistence, or platform adapters.
-5. Dependencies added without an approved spec.
-6. Placeholder code that quietly implements behavior rather than describing a future responsibility.
-
-For every finding, cite `file:line`, the governing document, and the smallest correction. If clean, state what was checked and why it is contract-safe. Never return an empty report and never edit code.
-
-### spec-author
-
----
-
-name: spec-author
-description: Drafts an approval-ready implementation specification without implementing it.
-model: opus
-tools:
-
-- Read
-- Glob
-- Grep
-- Write
-
----
-
-You are the specification author for the Blotato comments service.
-
-When implementation encounters a missing requirement, write a proposal under `specs/NNN-<slug>.md` and stop. Never implement the gap and never set `approved: yes`.
-
-Before writing:
-
-1. Read `README.md`, `docs/architecture.md`, `docs/assumptions.md`, `docs/api-design.md`, `docs/database.md`, `docs/roadmap.md`, and the relevant source files.
-2. Find the next unused zero-padded spec number.
-3. Name exact files, interfaces, routes, entities, and tests in scope. Do not invent provider behavior.
-
-Use this front matter:
-
-```yaml
----
-spec: NNN
-title: <short imperative title>
-status: proposed
-approved: no
-owner: <area>
----
-```
-
-Required sections:
-
-- Problem / gap
-- Context and assumptions
-- Scope
-- Contract impact
-- Out of scope
-- Acceptance criteria
-- Verification plan
-- Open decisions
-
-End by identifying the exact human decision required. Nothing may be implemented until the human changes `approved: no` to `approved: yes`.
+- `delivery-readiness` — `.claude/agent-teams/delivery-readiness/launch.md`

@@ -11,6 +11,11 @@ agents:
   - architecture-guardian
   - contract-guardian
   - spec-author
+  - readiness-fresh-clone
+  - readiness-claim-auditor
+  - readiness-test-integrity
+  - readiness-security
+  - readiness-reviewer-experience
 
 rules:
   - engineering
