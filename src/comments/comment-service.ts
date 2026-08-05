@@ -280,7 +280,12 @@ export class CommentService {
     // under someone else's name.
     let reply;
     try {
-      reply = await provider.replyToComment({ post, parentExternalCommentId, body });
+      reply = await provider.replyToComment({
+        post,
+        connection: post.connection,
+        parentExternalCommentId,
+        body,
+      });
     } catch (error) {
       const failureCode = toFailureCode(error);
       await this.operations.fail(context, claim.operation.id, failureCode);
@@ -394,6 +399,7 @@ export class CommentService {
   ) {
     return provider.listComments({
       post,
+      connection: post.connection,
       limit: PROVIDER_PAGE_LIMIT,
       ...(providerCursor === null ? {} : { providerCursor }),
     });

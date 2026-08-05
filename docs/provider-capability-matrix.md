@@ -50,8 +50,9 @@ Selecting one platform would have meant either fabricating credentials the assig
 1. Confirm the provider's capabilities against its current documentation and record any difference in this matrix.
 2. Implement a `ProviderClient` in `src/platforms/` that owns SDK types and external identifiers.
 3. Wrap it with `AdaptiveProviderAdapter` and map every external record into the normalized `Comment` contract.
-4. Register the adapter in composition code and add deterministic mapping and failure tests.
-5. Document pagination, timestamps, rate limits, timeout behavior, and credential references before enabling production traffic.
+4. Resolve the credential from the `SocialConnection` supplied on each call (Spec-016). One adapter instance serves every tenant, so the authorised connection arrives per call rather than per instance, and the adapter exchanges the `credentialReference` for a token through the platform infrastructure that owns it (A-002). The reference is never a secret and must not enter a log or a response.
+5. Register the adapter in composition code and add deterministic mapping and failure tests.
+6. Document pagination, timestamps, rate limits, timeout behavior, and credential references before enabling production traffic.
 
 A capability the provider lacks is a typed `UNSUPPORTED_CAPABILITY` error, never a silent emulation: the registry rejects an unconfigured platform, and the adapter's declared capability set is checked before any write reaches the provider.
 

@@ -39,6 +39,8 @@ interface PostRow {
   platform: Platform;
   external_post_id: string;
   published_at: string;
+  social_account_id: string;
+  credential_reference: string;
   provider_cursor: string | null;
   provider_exhausted: boolean;
   provider_completed_at: string | null;
@@ -118,7 +120,10 @@ export class PostgresPostRepository implements PostRepository {
     if (!isUuid(postId)) return null;
     return this.db.withTenant(context.accountId, async (tx) => {
       const result = await tx.query<PostRow>(
+        // The social account is the authorised connection a provider call acts
+        // as (Spec-016). The join was already here; only the columns are new.
         `select p.id, p.account_id, sa.platform, p.external_post_id, p.published_at,
+                sa.id as social_account_id, sa.credential_reference,
                 p.provider_cursor, p.provider_exhausted, p.provider_completed_at
          from posts p
          join social_accounts sa on sa.id = p.social_account_id
@@ -134,6 +139,11 @@ export class PostgresPostRepository implements PostRepository {
           platform: row.platform,
           externalPostId: row.external_post_id,
           publishedAt: new Date(row.published_at).toISOString(),
+          connection: {
+            socialAccountId: row.social_account_id,
+            platform: row.platform,
+            credentialReference: row.credential_reference,
+          },
         },
         snapshot: {
           providerCursor: row.provider_cursor,

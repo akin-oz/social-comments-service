@@ -64,12 +64,31 @@ export interface RequestContext extends TenantContext {
   requestId: string;
 }
 
+/**
+ * The authorised connection a provider call acts as (A-002, Spec-016).
+ *
+ * `credentialReference` names a secret held by platform infrastructure; it is
+ * never the secret itself. An adapter resolves it through infrastructure it
+ * owns, so nothing secret enters the domain, a response, or a log record.
+ */
+export interface SocialConnection {
+  socialAccountId: string;
+  platform: Platform;
+  credentialReference: string;
+}
+
 export interface PublishedPost {
   id: string;
   accountId: AccountId;
   platform: Platform;
   externalPostId: string;
   publishedAt: string;
+  /**
+   * The connection this post was published through. One adapter instance per
+   * platform is shared across tenants, so the connection has to travel with the
+   * call rather than with the adapter.
+   */
+  connection: SocialConnection;
 }
 
 export type ReplyOperationStatus = 'pending' | 'completed' | 'failed';

@@ -8,7 +8,12 @@ import {
   type ProviderRetryPolicies,
 } from '../shared/observability.js';
 import { toFailureCode } from '../shared/errors.js';
-import type { ObservedComment, Platform, PublishedPost } from '../shared/types.js';
+import type {
+  ObservedComment,
+  Platform,
+  PublishedPost,
+  SocialConnection,
+} from '../shared/types.js';
 import type {
   AdaptiveProvider,
   ProviderCapability,
@@ -41,11 +46,13 @@ export interface ProviderPage {
  */
 export interface ProviderClient {
   listComments(query: {
+    connection: SocialConnection;
     externalPostId: string;
     cursor?: string;
     limit: number;
   }): Promise<ProviderPage>;
   replyToComment(command: {
+    connection: SocialConnection;
     externalPostId: string;
     externalCommentId: string;
     body: string;
@@ -62,9 +69,11 @@ export class AdaptiveProviderAdapter implements AdaptiveProvider {
   ) {}
 
   public async listComments(query: ProviderListCommentsQuery): Promise<ProviderCommentPage> {
+    const connection = this.authorised(query.connection);
     const page = await callProvider(
       () =>
         this.client.listComments({
+          connection,
           externalPostId: query.post.externalPostId,
           ...(query.providerCursor === undefined ? {} : { cursor: query.providerCursor }),
           limit: query.limit,
@@ -85,9 +94,11 @@ export class AdaptiveProviderAdapter implements AdaptiveProvider {
   }
 
   public async replyToComment(command: ProviderReplyCommand): Promise<ObservedComment> {
+    const connection = this.authorised(command.connection);
     const item = await callProvider(
       () =>
         this.client.replyToComment({
+          connection,
           externalPostId: command.post.externalPostId,
           externalCommentId: command.parentExternalCommentId,
           body: command.body,
@@ -98,6 +109,30 @@ export class AdaptiveProviderAdapter implements AdaptiveProvider {
       (error, delayMs) => this.logRetry('reply_to_comment', error, delayMs),
     );
     return this.toObserved(item, command.post, command.parentExternalCommentId);
+  }
+
+  /**
+   * Checks the call carries a usable connection before it reaches the client.
+   *
+   * One adapter instance serves every tenant, so a call without a connection is
+   * a call with no account to act as. Failing here names the problem; letting it
+   * through means an SDK error, or worse, a default credential.
+   *
+   * The message deliberately omits the reference itself: it names a secret
+   * (ADR-0011).
+   */
+  private authorised(connection: SocialConnection): SocialConnection {
+    if (connection.credentialReference.trim() === '' || connection.socialAccountId.trim() === '') {
+      throw new ProviderError(
+        `Provider ${this.platform} was called without an authorised connection.`,
+      );
+    }
+    if (connection.platform !== this.platform) {
+      throw new ProviderError(
+        `Provider ${this.platform} was given a ${connection.platform} connection.`,
+      );
+    }
+    return connection;
   }
 
   /**

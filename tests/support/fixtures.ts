@@ -1,6 +1,11 @@
 import type { ExternalCommentRecord } from '../../src/platforms/adaptive-provider.js';
 import type { LogFields, Logger } from '../../src/shared/observability.js';
-import type { ObservedComment, PublishedPost, RequestContext } from '../../src/shared/types.js';
+import type {
+  ObservedComment,
+  PublishedPost,
+  RequestContext,
+  SocialConnection,
+} from '../../src/shared/types.js';
 
 export const tenant: RequestContext = { accountId: 'account-1', requestId: 'req-1' };
 export const otherTenant: RequestContext = { accountId: 'account-2', requestId: 'req-2' };
@@ -37,12 +42,19 @@ export class RecordingLogger implements Logger {
   }
 }
 
+export const connection: SocialConnection = {
+  socialAccountId: 'social-account-1',
+  platform: 'instagram',
+  credentialReference: 'secret://social/instagram/tenant-1',
+};
+
 export const post: PublishedPost = {
   id: 'post-1',
   accountId: tenant.accountId,
   platform: 'instagram',
   externalPostId: 'external-post-1',
   publishedAt: '2026-08-01T09:00:00.000Z',
+  connection,
 };
 
 export function externalComment(externalId: string, publishedAt: string): ExternalCommentRecord {

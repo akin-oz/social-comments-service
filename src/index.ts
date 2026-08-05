@@ -175,6 +175,13 @@ export const demoPost: PublishedPost = {
   platform: 'instagram',
   externalPostId: 'ig-post-1',
   publishedAt: '2026-08-01T09:00:00.000Z',
+  connection: {
+    socialAccountId: '2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b011',
+    platform: 'instagram',
+    // A pointer to a secret held by platform infrastructure, never the secret
+    // itself (A-002).
+    credentialReference: 'secret://social/instagram/tenant-a',
+  },
 };
 
 const demoExternalComments: readonly ExternalCommentRecord[] = [
@@ -226,11 +233,10 @@ const secondTenantExternalComments: readonly ExternalCommentRecord[] = [
 /**
  * Fixture comments per provider post.
  *
- * Each post has distinct external identifiers because ADR-0010 derives a
- * comment's internal identity from `(platform, externalId)`. Reusing one set
- * across two posts would derive one identity for two comments and collide on
- * the primary key, which is what a real provider's globally unique comment
- * identifiers prevent.
+ * Each post has distinct external identifiers because deduplication keys on
+ * `(social_account_id, external_comment_id)` (ADR-0013). Reusing one set across
+ * two posts under one social account would fold two comments into one row,
+ * which globally unique provider identifiers prevent in reality.
  */
 const fixtureCommentsByPost = new Map<string, readonly ExternalCommentRecord[]>([
   ['ig-post-1', demoExternalComments],

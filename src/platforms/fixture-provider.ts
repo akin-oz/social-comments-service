@@ -1,4 +1,5 @@
 import type { ExternalCommentRecord, ProviderClient, ProviderPage } from './adaptive-provider.js';
+import type { SocialConnection } from '../shared/types.js';
 
 export interface FixtureProviderOptions {
   /** External comments keyed by the provider's post identifier. */
@@ -18,6 +19,16 @@ export class FixtureProviderClient implements ProviderClient {
   private readonly maxPageSize: number;
   private readonly now: () => string;
   private replyCount = 0;
+  /**
+   * Every connection this client has been called with, in order. A real SDK
+   * would spend it on an access token; the fixture keeps it so a test can prove
+   * two tenants reached the provider as themselves (Spec-016).
+   */
+  public readonly connections: SocialConnection[] = [];
+
+  private record(connection: SocialConnection): void {
+    this.connections.push(assertAuthorised(connection));
+  }
 
   public constructor(options: FixtureProviderOptions) {
     this.commentsByPost = options.commentsByPost;
@@ -26,10 +37,12 @@ export class FixtureProviderClient implements ProviderClient {
   }
 
   public async listComments(query: {
+    connection: SocialConnection;
     externalPostId: string;
     cursor?: string;
     limit: number;
   }): Promise<ProviderPage> {
+    this.record(query.connection);
     const all = this.commentsByPost.get(query.externalPostId) ?? [];
     const offset = decodeOffset(query.cursor);
     const size = Math.min(query.limit, this.maxPageSize);
@@ -40,10 +53,12 @@ export class FixtureProviderClient implements ProviderClient {
   }
 
   public async replyToComment(command: {
+    connection: SocialConnection;
     externalPostId: string;
     externalCommentId: string;
     body: string;
   }): Promise<ExternalCommentRecord> {
+    this.record(command.connection);
     this.replyCount += 1;
     const timestamp = this.now();
     return {
@@ -56,6 +71,17 @@ export class FixtureProviderClient implements ProviderClient {
       updatedAt: timestamp,
     };
   }
+}
+
+/**
+ * Refuses a call with no credential to spend, so wiring an adapter without a
+ * connection fails here rather than silently acting as nobody in particular.
+ */
+function assertAuthorised(connection: SocialConnection | undefined): SocialConnection {
+  if (connection === undefined || connection.credentialReference.trim() === '') {
+    throw new Error('The fixture provider was called without a credential reference.');
+  }
+  return connection;
 }
 
 function encodeOffset(offset: number): string {

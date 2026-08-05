@@ -129,6 +129,27 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     await expect(posts.findPublishedById(contextA, tenantB.postId)).resolves.toBeNull();
   });
 
+  it('returns the authorised connection the post was published through', async () => {
+    // The join to social_accounts was already there for the platform column;
+    // the connection a provider call acts as comes from the same row (Spec-016).
+    const record = await posts.findPublishedById(contextA, tenantA.postId);
+
+    expect(record?.post.connection).toEqual({
+      socialAccountId: tenantA.socialAccountId,
+      platform: tenantA.platform,
+      credentialReference: tenantA.credentialReference,
+    });
+  });
+
+  it('gives each tenant its own connection for the same platform', async () => {
+    const a = await posts.findPublishedById(contextA, tenantA.postId);
+    const b = await posts.findPublishedById(contextB, tenantB.postId);
+
+    expect(a?.post.connection.credentialReference).toBe(tenantA.credentialReference);
+    expect(b?.post.connection.credentialReference).toBe(tenantB.credentialReference);
+    expect(a?.post.connection.socialAccountId).not.toBe(b?.post.connection.socialAccountId);
+  });
+
   it('round-trips the snapshot state a read depends on', async () => {
     await posts.saveSnapshotState(contextA, tenantA.postId, {
       providerCursor: 'provider-page-2',

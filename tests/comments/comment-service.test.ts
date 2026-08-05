@@ -20,6 +20,7 @@ import {
 import type { ProviderCapability } from '../../src/comments/contracts.js';
 import { noopMetrics, providerPolicies, type RetryPolicy } from '../../src/shared/observability.js';
 import { externalComment, post, RecordingLogger, tenant } from '../support/fixtures.js';
+import type { PublishedPost, RequestContext } from '../../src/shared/types.js';
 
 const immediatePolicy: RetryPolicy = {
   maxAttempts: 1,
@@ -445,6 +446,99 @@ describe('replying to a comment', () => {
       service.replyToComment(tenant, parentId, 'Thank you!', 'key-1'),
     ).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY', statusCode: 422 });
     await expect(operations.findByIdempotencyKey(tenant, 'key-1')).resolves.toBeNull();
+  });
+});
+
+describe('provider authorization context', () => {
+  /**
+   * Two tenants on one platform, sharing the single adapter instance the
+   * registry holds. The connection has to travel with the call, because the
+   * adapter cannot know which tenant it is serving (Spec-016).
+   */
+  function twoTenants() {
+    const tenantB: RequestContext = { accountId: 'account-b', requestId: 'req-b' };
+    const postB: PublishedPost = {
+      id: 'post-b',
+      accountId: tenantB.accountId,
+      platform: 'instagram',
+      externalPostId: 'external-post-b',
+      publishedAt: '2026-08-01T09:30:00.000Z',
+      connection: {
+        socialAccountId: 'social-account-b',
+        platform: 'instagram',
+        credentialReference: 'secret://social/instagram/tenant-b',
+      },
+    };
+    const client = new FixtureProviderClient({
+      commentsByPost: new Map([
+        [post.externalPostId, [externalComment('ig-comment-1', '2026-08-01T10:00:00.000Z')]],
+        [postB.externalPostId, [externalComment('ig-comment-9', '2026-08-01T10:30:00.000Z')]],
+      ]),
+      now: () => '2026-08-02T12:00:00.000Z',
+    });
+    const logger = new RecordingLogger();
+    const service = new CommentService(
+      new InMemoryCommentRepository([], tenant.accountId),
+      new InMemoryPostRepository([post, postB]),
+      new InMemoryReplyOperationRepository(),
+      new InMemoryPlatformProviderRegistry(
+        new Map([
+          [
+            'instagram',
+            new AdaptiveProviderAdapter(
+              'instagram',
+              client,
+              new Set(['list_comments', 'reply_to_comment']),
+              providerPolicies(immediatePolicy),
+              logger,
+            ),
+          ],
+        ]),
+      ),
+      noopMetrics,
+      logger,
+    );
+    return { service, client, logger, tenantB, postB };
+  }
+
+  it('reaches the provider as the connection the post was published through', async () => {
+    const { service, client } = twoTenants();
+
+    await service.listComments(tenant, post.id, { limit: 25 });
+
+    expect(client.connections).toEqual([post.connection]);
+  });
+
+  it('gives two tenants on one platform their own connections', async () => {
+    const { service, client, tenantB, postB } = twoTenants();
+
+    await service.listComments(tenant, post.id, { limit: 25 });
+    await service.listComments(tenantB, postB.id, { limit: 25 });
+
+    expect(client.connections.map((seen) => seen.credentialReference)).toEqual([
+      post.connection.credentialReference,
+      postB.connection.credentialReference,
+    ]);
+  });
+
+  it('carries the connection into a reply as well as a read', async () => {
+    const { service, client } = twoTenants();
+    const listed = await service.listComments(tenant, post.id, { limit: 25 });
+
+    await service.replyToComment(tenant, listed.items[0]!.id, 'Thank you!', 'key-1');
+
+    expect(client.connections.at(-1)).toEqual(post.connection);
+  });
+
+  it('never writes a credential reference into the log', async () => {
+    const { service, logger, tenantB, postB } = twoTenants();
+    await service.listComments(tenant, post.id, { limit: 25 });
+    await service.listComments(tenantB, postB.id, { limit: 25 });
+
+    const written = JSON.stringify(logger.records);
+    expect(written).not.toContain(post.connection.credentialReference);
+    expect(written).not.toContain(postB.connection.credentialReference);
+    expect(written).not.toContain('secret://');
   });
 });
 

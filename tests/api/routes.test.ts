@@ -49,6 +49,21 @@ describe('comment REST API', () => {
     await app.close();
   });
 
+  it('never serializes the authorised connection to clients', async () => {
+    // The connection travels with every provider call (Spec-016). It names a
+    // secret and identifies a platform account, so neither it nor the social
+    // account it points at may cross the API boundary.
+    const app = createDemoApplication({ logger: false });
+
+    const { body } = await listComments(app);
+
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain(demoPost.connection.credentialReference);
+    expect(serialized).not.toContain(demoPost.connection.socialAccountId);
+    expect(serialized).not.toContain('secret://');
+    await app.close();
+  });
+
   it('walks every page using the cursor it issued', async () => {
     const app = createDemoApplication({ logger: false });
 

@@ -6,6 +6,7 @@ import type {
   Platform,
   PublishedPost,
   ReplyOperation,
+  SocialConnection,
   TenantContext,
 } from '../shared/types.js';
 
@@ -104,10 +105,13 @@ export interface ReplyOperationRepository {
 
 /**
  * Provider-facing query. The post carries both identities so adapters never
- * have to resolve internal identifiers themselves.
+ * have to resolve internal identifiers themselves, and the connection says
+ * which authorised account to act as (Spec-016). The service is the only place
+ * either is constructed, so the two cannot disagree.
  */
 export interface ProviderListCommentsQuery {
   post: PublishedPost;
+  connection: SocialConnection;
   providerCursor?: string;
   limit: number;
 }
@@ -120,6 +124,7 @@ export interface ProviderCommentPage {
 
 export interface ProviderReplyCommand {
   post: PublishedPost;
+  connection: SocialConnection;
   parentExternalCommentId: string;
   body: string;
 }

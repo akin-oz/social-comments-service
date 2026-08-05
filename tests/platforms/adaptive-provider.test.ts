@@ -4,7 +4,7 @@ import { AdaptiveProviderAdapter } from '../../src/platforms/adaptive-provider.j
 import { FixtureProviderClient } from '../../src/platforms/fixture-provider.js';
 import { ProviderError, ProviderUnavailableError } from '../../src/shared/errors.js';
 import { providerPolicies, providerRetryPolicy } from '../../src/shared/observability.js';
-import { externalComment, post } from '../support/fixtures.js';
+import { connection, externalComment, post } from '../support/fixtures.js';
 
 function adapter(client: ConstructorParameters<typeof AdaptiveProviderAdapter>[1]) {
   return new AdaptiveProviderAdapter(
@@ -27,7 +27,7 @@ describe('adaptive provider adapter', () => {
   it('maps provider records onto internal identities and the internal post', async () => {
     const provider = fixtureAdapter([externalComment('ig-comment-1', '2026-08-01T10:00:00.000Z')]);
 
-    const page = await provider.listComments({ post, limit: 10 });
+    const page = await provider.listComments({ post, connection, limit: 10 });
 
     expect(page).toEqual({
       items: [
@@ -55,7 +55,7 @@ describe('adaptive provider adapter', () => {
       },
     });
 
-    await provider.listComments({ post, limit: 10 });
+    await provider.listComments({ post, connection, limit: 10 });
 
     expect(seen).toEqual([post.externalPostId]);
   });
@@ -82,6 +82,7 @@ describe('adaptive provider adapter', () => {
 
     const reply = await provider.replyToComment({
       post,
+      connection,
       parentExternalCommentId: 'ig-comment-1',
       body: 'Thank you!',
     });
@@ -102,7 +103,7 @@ describe('adaptive provider adapter', () => {
       externalComment('ig-comment-2', '2026-08-01T11:00:00.000Z'),
     ]);
 
-    const page = await provider.listComments({ post, limit: 1 });
+    const page = await provider.listComments({ post, connection, limit: 1 });
 
     expect(page.hasMore).toBe(true);
     expect(page.nextProviderCursor).toEqual(expect.any(String));
@@ -137,7 +138,12 @@ describe('adaptive provider adapter', () => {
     );
 
     await expect(
-      provider.replyToComment({ post, parentExternalCommentId: 'ig-comment-1', body: 'Thanks!' }),
+      provider.replyToComment({
+        post,
+        connection,
+        parentExternalCommentId: 'ig-comment-1',
+        body: 'Thanks!',
+      }),
     ).rejects.toBeInstanceOf(ProviderUnavailableError);
 
     expect(published).toBe(1);
@@ -161,8 +167,69 @@ describe('adaptive provider adapter', () => {
       providerPolicies({ ...providerRetryPolicy, timeoutMs: 500, baseDelayMs: 1, maxDelayMs: 2 }),
     );
 
-    await expect(provider.listComments({ post, limit: 10 })).resolves.toMatchObject({ items: [] });
+    await expect(provider.listComments({ post, connection, limit: 10 })).resolves.toMatchObject({
+      items: [],
+    });
     expect(attempts).toBe(2);
+  });
+
+  it('hands the client the authorised connection on both operations', async () => {
+    const client = new FixtureProviderClient({
+      commentsByPost: new Map([[post.externalPostId, []]]),
+      now: () => '2026-08-02T12:00:00.000Z',
+    });
+    const provider = adapter(client);
+
+    await provider.listComments({ post, connection, limit: 10 });
+    await provider.replyToComment({
+      post,
+      connection,
+      parentExternalCommentId: 'ig-comment-1',
+      body: 'Thanks!',
+    });
+
+    expect(client.connections).toEqual([connection, connection]);
+  });
+
+  it('refuses a call with no credential to spend', async () => {
+    const provider = fixtureAdapter([]);
+
+    await expect(
+      provider.listComments({
+        post,
+        connection: { ...connection, credentialReference: '' },
+        limit: 10,
+      }),
+    ).rejects.toBeInstanceOf(ProviderError);
+  });
+
+  it('refuses a connection belonging to a different platform', async () => {
+    const provider = fixtureAdapter([]);
+
+    await expect(
+      provider.listComments({
+        post,
+        connection: { ...connection, platform: 'youtube' },
+        limit: 10,
+      }),
+    ).rejects.toBeInstanceOf(ProviderError);
+  });
+
+  it('keeps the credential reference out of the message when it refuses', async () => {
+    // A reference names a secret, so it does not belong in an error that will
+    // be logged (ADR-0011). Asserted by reading the message: `rejects.toThrow`
+    // with a not-matcher passes whatever the message says.
+    const provider = fixtureAdapter([]);
+
+    const raised = await provider
+      .listComments({ post, connection: { ...connection, socialAccountId: '' }, limit: 10 })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+    expect(raised).toBeInstanceOf(ProviderError);
+    expect((raised as Error).message).not.toContain(connection.credentialReference);
   });
 
   it('rejects a provider page that claims more results without a cursor', async () => {
@@ -173,6 +240,8 @@ describe('adaptive provider adapter', () => {
       },
     });
 
-    await expect(provider.listComments({ post, limit: 10 })).rejects.toBeInstanceOf(ProviderError);
+    await expect(provider.listComments({ post, connection, limit: 10 })).rejects.toBeInstanceOf(
+      ProviderError,
+    );
   });
 });
