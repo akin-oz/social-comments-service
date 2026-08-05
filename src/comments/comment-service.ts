@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   NotFoundError,
   ProviderCursorRejectedError,
@@ -54,6 +56,15 @@ function snapshotLifetimeMs(): number {
   const seconds =
     Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_SNAPSHOT_LIFETIME_SECONDS;
   return seconds * 1000;
+}
+
+/**
+ * Binds an idempotency key to one request without storing the request. The
+ * body is user content, and an audit row is the wrong place to keep it
+ * (ADR-0011); a digest compares identically.
+ */
+function requestFingerprint(commentId: string, body: string): string {
+  return createHash('sha256').update(`${commentId}:${body}`, 'utf8').digest('hex');
 }
 
 const emptySnapshotState: PostSnapshotState = {
@@ -176,7 +187,7 @@ export class CommentService {
   ): Promise<Comment> {
     const command: ReplyToCommentCommand = { commentId, body, idempotencyKey };
     validateReplyToCommentCommand(command);
-    const fingerprint = `${commentId}:${body}`;
+    const fingerprint = requestFingerprint(commentId, body);
 
     const previous = await this.operations.findByIdempotencyKey(context, idempotencyKey);
     if (previous) {
@@ -194,6 +205,9 @@ export class CommentService {
 
     const comment = await this.comments.findById(context, commentId);
     if (!comment) {
+      // Counted here too: a dashboard that only sees post-claim failures
+      // undercounts exactly the outage worth alerting on.
+      this.metrics.increment('comments.reply.failure', { code: 'COMMENT_NOT_FOUND' });
       throw new NotFoundError('COMMENT_NOT_FOUND', 'The requested comment was not found.');
     }
     const postRecord = await this.posts.findPublishedById(context, comment.postId);
@@ -222,7 +236,16 @@ export class CommentService {
     });
     if (!claim.claimed) {
       const replayed = await this.replay(context, claim.operation, fingerprint);
-      if (replayed) return replayed;
+      if (replayed) {
+        this.metrics.increment('comments.reply.replayed', { platform: comment.platform });
+        this.logger.info('comments.reply.replayed', {
+          ...this.trace(context),
+          commentId,
+          replyId: replayed.id,
+          reason: 'concurrent',
+        });
+        return replayed;
+      }
       this.metrics.increment('comments.reply.duplicate_attempted', { platform: comment.platform });
       this.logger.warn('comments.reply.conflict', {
         ...this.trace(context),

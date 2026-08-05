@@ -36,7 +36,7 @@ The service uses opaque cursors so it can preserve provider pagination semantics
 
 ## A-009: Idempotency is required for writes
 
-Clients provide an idempotency key for reply creation. The eventual persistence layer will use it to prevent accidental duplicate replies during retries.
+Clients provide an idempotency key for reply creation. The persistence layer claims that key on insert, so concurrent requests cannot both reach the provider and a retry returns the reply already published.
 
 ## A-010: One service boundary is sufficient initially
 

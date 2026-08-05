@@ -41,7 +41,10 @@ export const commentSchema = {
   ],
   additionalProperties: false,
   properties: {
-    id: { type: 'string', description: 'Service-owned identifier (ADR-0010).' },
+    id: {
+      type: 'string',
+      description: 'Service-owned identifier, assigned by persistence (ADR-0013).',
+    },
     postId: { type: 'string', description: 'Internal identifier of the published post.' },
     platform: { type: 'string', enum: platformValues },
     author: {
@@ -49,7 +52,11 @@ export const commentSchema = {
       required: ['id', 'displayName'],
       additionalProperties: false,
       properties: {
-        id: { type: 'string', description: "The provider's author identifier." },
+        id: {
+          type: 'string',
+          description:
+            "The provider's author identifier. Authors are not resources this service owns, so this is the one provider-issued value the contract exposes.",
+        },
         displayName: { type: 'string' },
         profileUrl: { type: 'string' },
       },

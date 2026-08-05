@@ -10,7 +10,7 @@
   "scripts": {
     "ai:sync": "node scripts/sync-ai.mjs",
     "ai:validate": "pnpm exec ai validate",
-    "build": "tsc",
+    "build": "tsc --project tsconfig.build.json",
     "dev": "tsx watch src/server.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

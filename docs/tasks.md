@@ -98,19 +98,19 @@ The review's method is worth stating: it re-applied real historical defects and 
 
 - [ ] **Cursor forgery: `INVALID_CURSOR` does not do what the contract promises.** `docs/api-design.md` says a cursor the service did not issue is rejected; the codec accepts any well-formed base64 JSON, and the decoded keyset reaches PostgreSQL as unvalidated `::timestamptz`/`::uuid` casts, producing a 500 and an error-level log per request. No cross-tenant read is possible — the predicate and RLS both hold. Relatedly, the provider-cursor field in the client cursor is now write-only, since the service reads persisted snapshot state instead, so it leaks upstream tokens for no benefit. Dropping that field and validating the cursor fixes both.
 - [ ] **The `comments_app` role's attributes are never pinned.** Migration 002 skips role creation if the name already exists, so a pre-existing `comments_app` holding `SUPERUSER` or `BYPASSRLS` silently defeats every policy. An unconditional `alter role … nosuperuser nobypassrls` plus a `pg_roles` assertion in the integration test closes it.
-- [ ] **Production fails open to the in-memory demo.** A missing or misspelled `DATABASE_URL` under `NODE_ENV=production` starts the demo composition, passes `/health`, and honours any `X-Account-Id` with no row-level security behind it. It should refuse to start.
-- [ ] **No UUID validation on `X-Account-Id` or path parameters**, so a malformed identifier yields 500 where the contract says 404.
-- [ ] **The unhandled-error log records an unprojected error object**, so a `pg` `DatabaseError` can carry `detail`, `internalQuery`, and constraint values into logs — the one exception to the otherwise-enforced rule that content never reaches a log record.
+- [x] **Production failed open to the in-memory demo.** A missing `DATABASE_URL` under `NODE_ENV=production` now stops the process instead of starting a service with no row-level security behind it. A missing or misspelled `DATABASE_URL` under `NODE_ENV=production` starts the demo composition, passes `/health`, and honours any `X-Account-Id` with no row-level security behind it. It should refuse to start.
+- [x] **No UUID validation on `X-Account-Id` or path parameters.** A malformed account context is now `401` and a malformed identifier is `404`, verified against PostgreSQL where both previously reached a `::uuid` cast and produced a 500., so a malformed identifier yields 500 where the contract says 404.
+- [x] **The unhandled-error log recorded an unprojected error object.** Only the name, message, and stack are logged now, so a driver error cannot carry `detail` or `internalQuery` into the log., so a `pg` `DatabaseError` can carry `detail`, `internalQuery`, and constraint values into logs — the one exception to the otherwise-enforced rule that content never reaches a log record.
 - [ ] **`accounts` has no row-level security** while `comments_app` holds `select` on it. No live query touches it, but the defence-in-depth story stops one table short.
-- [ ] **The migration runner silently no-ops without `APP_DATABASE_PASSWORD`**, leaving a passwordless `LOGIN` role; it should refuse like it does for a missing `DATABASE_URL`.
+- [x] **The migration runner silently no-opped without `APP_DATABASE_PASSWORD`.** It now refuses, rather than leaving a passwordless login role., leaving a passwordless `LOGIN` role; it should refuse like it does for a missing `DATABASE_URL`.
 - [ ] **The in-memory adapter scopes tenants by string-prefix match**, which is presented as a first-class alternative with no database policy behind it.
 
 ### Smaller
 
-- [ ] The Docker image ships compiled tests, because `tsconfig.json` includes `tests/` in the build output.
-- [ ] The reply `curl` in the README 404s if run standalone; the list request must run first in the same session to populate the snapshot.
-- [ ] `request_fingerprint` stores the reply body in plain text; hashing it would serve the same purpose.
-- [ ] `src/api/schemas.ts` contradicts itself on whether provider identifiers are exposed.
+- [x] The Docker image shipped compiled tests; `pnpm build` now uses a build-only project and the image contains `dist/src` alone.
+- [x] The README now says the list request must run first, because a reply resolves against the stored snapshot.
+- [x] `request_fingerprint` stored the reply body in plain text; it is now a SHA-256 digest, verified by a test asserting the body is absent from the audit trail.
+- [x] `src/api/schemas.ts` no longer contradicts itself on provider identifiers: the author identifier is documented as the one provider-issued value the contract exposes.
 - [ ] `@akinlabs/ai-engineering` is pinned to a mutable git tag.
 
 ## Raised by the principal-review board
@@ -129,7 +129,7 @@ The board judged the design rather than its compliance. Three of its blocking fi
 - [ ] **The provider port has no room for a credential.** One adapter instance per platform is shared across tenants, and `PublishedPost` carries no social account, so A-002's authorised provider context has nowhere to go. A field on two interfaces today; a change to a widely depended-on domain type later.
 - [ ] **`IDEMPOTENCY_CONFLICT` carries three meanings a client can only distinguish by reading prose**, and A-005's one-level-reply invariant is enforced nowhere in code.
 
-Cursor rejection handling, dropping the provider token from the public cursor, and exercising the PostgreSQL composition are done. Still open from the board: no timeout on any database call or on the HTTP server; no single-flight on cold-post hydration, so concurrent readers amplify provider load; and the model cannot represent a reply whose resolved parent differs from the requested one, which Instagram does silently.
+Cursor rejection handling, dropping the provider token from the public cursor, exercising the PostgreSQL composition, and bounding every database call and the HTTP server are done. Still open from the board: no single-flight on cold-post hydration, so concurrent readers of a cold post amplify provider load; and the model cannot represent a reply whose resolved parent differs from the requested one, which Instagram does silently.
 
 ## Known defects
 

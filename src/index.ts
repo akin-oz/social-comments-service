@@ -129,6 +129,8 @@ export function createApplication(dependencies: ApplicationDependencies = {}): F
             },
           },
     requestIdHeader: 'x-request-id',
+    // A request that outlives this is one the client has already abandoned.
+    requestTimeout: 30_000,
   });
   const logger = toLoggerPort(app.log);
 

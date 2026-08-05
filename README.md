@@ -111,7 +111,7 @@ In-memory repositories and the fixture provider, so nothing needs installing. Th
 curl 'http://localhost:3000/v2/posts/2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b002/comments?limit=2' -H 'X-Account-Id: 2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b001'
 ```
 
-That returns two comments and a `nextCursor`. Passing the cursor back returns the remaining page; replying uses a comment ID from the response:
+That returns comments and a `nextCursor`. Passing the cursor back returns the remaining pages. Replying uses a comment ID **from that response** — the identifier below is the demo's first comment, and the list request must have run first, because a reply resolves against the stored snapshot:
 
 ```bash
 curl -X POST 'http://localhost:3000/v2/comments/beb5d133-e54d-5998-91d0-25f49f24aa7e/replies' -H 'X-Account-Id: 2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b001' -H 'Idempotency-Key: demo-1' -H 'Content-Type: application/json' -d '{"body":"Thank you!"}'
@@ -144,7 +144,7 @@ The expected workflow is:
 7. Complete operational and design documentation.
 8. Polish validation, observability, and delivery concerns.
 
-The detailed definition of done for each milestone is in [roadmap.md](docs/roadmap.md).
+The detailed definition of done for each milestone is in [roadmap.md](docs/roadmap.md), and [operations.md](docs/operations.md) covers observability, database roles, migrations, and failure handling.
 
 ## AI usage disclosure
 

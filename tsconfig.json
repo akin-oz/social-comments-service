@@ -16,5 +16,7 @@
     "rootDir": ".",
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"],
+  // Only src is emitted; tests are type-checked but never shipped in the image.
+  "exclude": []
 }

@@ -33,7 +33,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "Service-owned identifier (ADR-0010)."
+            "description": "Service-owned identifier, assigned by persistence (ADR-0013)."
           },
           "postId": {
             "type": "string",
@@ -59,7 +59,7 @@
             "properties": {
               "id": {
                 "type": "string",
-                "description": "The provider's author identifier."
+                "description": "The provider's author identifier. Authors are not resources this service owns, so this is the one provider-issued value the contract exposes."
               },
               "displayName": {
                 "type": "string"

@@ -64,7 +64,10 @@ async function migrate(): Promise<void> {
  */
 async function setApplicationPassword(client: Client): Promise<void> {
   const password = process.env.APP_DATABASE_PASSWORD;
-  if (password === undefined) return;
+  if (password === undefined || password === '') {
+    // Silently skipping leaves comments_app able to log in without one.
+    throw new Error('APP_DATABASE_PASSWORD must be set so the service role has a password.');
+  }
   await client.query(`alter role comments_app password ${client.escapeLiteral(password)}`);
   process.stdout.write('set the comments_app password\n');
 }

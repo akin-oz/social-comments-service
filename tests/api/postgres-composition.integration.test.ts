@@ -124,6 +124,43 @@ describe.skipIf(!enabled)('PostgreSQL composition through the API', () => {
     expect(response.json()).toMatchObject({ error: { code: 'POST_NOT_FOUND' } });
   });
 
+  it('treats a malformed identifier as absent rather than failing the cast', async () => {
+    // Against PostgreSQL this reached a ::uuid cast and produced a 500 with an
+    // error-level log per request.
+    const response = await application.inject({
+      method: 'GET',
+      url: '/v2/posts/not-a-uuid/comments',
+      headers: { 'x-account-id': tenantA.accountId },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ error: { code: 'POST_NOT_FOUND' } });
+  });
+
+  it('does not store the reply body in the audit trail', async () => {
+    const listed = await list(tenantA.accountId, tenantA.postId);
+    const commentId = listed.json().data[0].id;
+    const secret = `sensitive-${crypto.randomUUID()}`;
+
+    await application.inject({
+      method: 'POST',
+      url: `/v2/comments/${commentId}/replies`,
+      headers: {
+        'x-account-id': tenantA.accountId,
+        'idempotency-key': `audit-${crypto.randomUUID()}`,
+      },
+      payload: { body: secret },
+    });
+
+    const stored = await database.withTenant(tenantA.accountId, (tx) =>
+      tx.query<{ count: string }>(
+        `select count(*)::text as count from reply_operations where request_fingerprint like $1`,
+        [`%${secret}%`],
+      ),
+    );
+    expect(stored.rows[0]!.count).toBe('0');
+  });
+
   it('maps a forged cursor to the documented client error', async () => {
     const response = await list(tenantA.accountId, tenantA.postId, 'cursor=tampered');
 

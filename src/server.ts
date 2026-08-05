@@ -10,6 +10,17 @@ const port = Number.parseInt(process.env.PORT ?? '3000', 10);
 const host = process.env.HOST ?? '0.0.0.0';
 const databaseUrl = process.env.DATABASE_URL;
 
+// Falling back to the demo composition in production would start a service
+// that passes its health check, accepts any account, and has no row-level
+// security behind it. A missing or misspelled DATABASE_URL must stop the
+// process, not silently downgrade it.
+if (databaseUrl === undefined && process.env.NODE_ENV === 'production') {
+  process.stderr.write(
+    'DATABASE_URL is required when NODE_ENV=production: refusing to start the in-memory composition.\n',
+  );
+  process.exit(1);
+}
+
 // With DATABASE_URL the service runs on PostgreSQL; without it, on in-memory
 // repositories so the demo needs nothing installed. Either way the provider is
 // the deterministic fixture, since no live platform SDK is selected.

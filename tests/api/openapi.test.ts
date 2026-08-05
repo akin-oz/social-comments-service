@@ -138,6 +138,35 @@ describe('documentation endpoints', () => {
     }
   });
 
+  it('refuses an account context that cannot be a tenant identifier', async () => {
+    // A malformed value reached a ::uuid cast and produced a 500 with an
+    // error-level log, where the contract promises a client error.
+    const app = createDemoApplication({ logger: false, apiDocs: false });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/v2/posts/${demoPost.id}/comments`,
+      headers: { 'x-account-id': 'not-a-uuid' },
+    });
+
+    expect(response.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it('treats a malformed post identifier as absent, not as a failure', async () => {
+    const app = createDemoApplication({ logger: false, apiDocs: false });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v2/posts/not-a-uuid/comments',
+      headers: { 'x-account-id': demoAccountId },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ error: { code: 'POST_NOT_FOUND' } });
+    await app.close();
+  });
+
   it('still requires an account context for the API itself', async () => {
     const app = createDemoApplication({ logger: false, apiDocs: true });
 

@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { DomainValidationError } from '../shared/validation.js';
 import { ProviderRateLimitError, ServiceError } from '../shared/errors.js';
 import { errorResponses, sharedSchemas } from './schemas.js';
+import { isUuid } from '../shared/identifiers.js';
 import type { CommentService } from '../comments/comment-service.js';
 import type { Comment, RequestContext } from '../shared/types.js';
 
@@ -68,7 +69,7 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
   app.addHook('onRequest', async (request: FastifyRequest, reply) => {
     if (isPublicPath(request.url)) return;
     const accountId = request.headers['x-account-id'];
-    if (typeof accountId !== 'string' || accountId.trim() === '') {
+    if (typeof accountId !== 'string' || !isUuid(accountId)) {
       request.log.warn(
         { event: 'http.request.rejected', code: 'UNAUTHENTICATED', statusCode: 401 },
         'request rejected',
@@ -220,8 +221,16 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
         .code(error.statusCode)
         .send(errorResponse(error.code, error.message, request.id));
     }
+    // A driver error carries detail, internalQuery, and constraint values that
+    // may quote row content. Only the shape is logged (ADR-0011).
     request.log.error(
-      { event: 'http.request.failed', err: error, statusCode: 500 },
+      {
+        event: 'http.request.failed',
+        statusCode: 500,
+        errorName: error instanceof Error ? error.name : 'unknown',
+        errorMessage: error instanceof Error ? error.message : undefined,
+        stack: error instanceof Error ? error.stack : undefined,
+      },
       'unhandled request error',
     );
     return reply

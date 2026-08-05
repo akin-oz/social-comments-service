@@ -1,4 +1,5 @@
 import { ServiceError } from '../shared/errors.js';
+import { isUuid } from '../shared/identifiers.js';
 import type { Database, SqlSession } from './database.js';
 import type {
   Comment,
@@ -114,6 +115,7 @@ export class PostgresPostRepository implements PostRepository {
     context: TenantContext,
     postId: string,
   ): Promise<PublishedPostRecord | null> {
+    if (!isUuid(postId)) return null;
     return this.db.withTenant(context.accountId, async (tx) => {
       const result = await tx.query<PostRow>(
         `select p.id, p.account_id, sa.platform, p.external_post_id, p.published_at,
@@ -165,6 +167,9 @@ export class PostgresCommentRepository implements CommentRepository {
   public constructor(private readonly db: Database) {}
 
   public async listByPost(context: TenantContext, query: ListCommentsQuery): Promise<CommentPage> {
+    // A cursor the service issued always holds a UUID; one that does not cannot
+    // name a row, so the page is empty rather than a failed cast.
+    if (query.after !== undefined && !isUuid(query.after.id)) return { items: [], hasMore: false };
     return this.db.withTenant(context.accountId, async (tx) => {
       // One extra row decides `hasMore` without a second count query.
       const result = await tx.query<CommentRow>(
@@ -190,6 +195,7 @@ export class PostgresCommentRepository implements CommentRepository {
   }
 
   public async findById(context: TenantContext, commentId: string): Promise<Comment | null> {
+    if (!isUuid(commentId)) return null;
     return this.db.withTenant(context.accountId, async (tx) => {
       const result = await tx.query<CommentRow>(
         `select ${commentColumns}
@@ -206,6 +212,7 @@ export class PostgresCommentRepository implements CommentRepository {
     context: TenantContext,
     commentId: string,
   ): Promise<string | null> {
+    if (!isUuid(commentId)) return null;
     return this.db.withTenant(context.accountId, async (tx) => {
       const result = await tx.query<{ external_comment_id: string }>(
         `select external_comment_id from comments where id = $1 and account_id = $2`,

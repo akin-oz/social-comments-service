@@ -29,8 +29,19 @@ export class PostgresDatabase implements Database {
   private readonly pool: Pool;
 
   public constructor(config: PoolConfig | string) {
-    this.pool =
-      typeof config === 'string' ? new Pool({ connectionString: config }) : new Pool(config);
+    // Every database call is bounded. Without these a single request can hold a
+    // pooled connection indefinitely while the client has long since given up.
+    const defaults: PoolConfig = {
+      connectionTimeoutMillis: 5_000,
+      idleTimeoutMillis: 30_000,
+      statement_timeout: 10_000,
+      query_timeout: 10_000,
+    };
+    this.pool = new Pool(
+      typeof config === 'string'
+        ? { ...defaults, connectionString: config }
+        : { ...defaults, ...config },
+    );
   }
 
   /**
