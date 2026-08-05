@@ -35,6 +35,51 @@ describe('in-memory comment repository', () => {
     });
   });
 
+  it('cannot match across the key delimiter one tenant identifier ends with', async () => {
+    // The adapter used to flatten (accountId, id) into `accountId:id` and scope
+    // reads with startsWith. An account identifier that is a prefix of another
+    // one, delimiter and all, then matched its rows. There is no database
+    // policy behind this composition, so the structure has to be the boundary
+    // (Spec-018).
+    const outer = { accountId: 'account-1', requestId: 'req-outer' };
+    const inner = { accountId: 'account-1:nested', requestId: 'req-inner' };
+    const comments = new InMemoryCommentRepository();
+
+    await comments.upsertMany(outer, [first]);
+    await comments.upsertMany(inner, [second]);
+
+    const outerPage = await comments.listByPost(outer, { ...listQuery, limit: 50 });
+    const innerPage = await comments.listByPost(inner, { ...listQuery, limit: 50 });
+
+    expect(outerPage.items.map((item) => item.body)).toEqual([`body of ${first.externalId}`]);
+    expect(innerPage.items.map((item) => item.body)).toEqual([`body of ${second.externalId}`]);
+  });
+
+  it('scopes idempotency keys across the delimiter too', async () => {
+    const outer = { accountId: 'account-1' };
+    const inner = { accountId: 'account-1:nested' };
+    const operations = new InMemoryReplyOperationRepository();
+    const claim = {
+      id: crypto.randomUUID(),
+      commentId: 'comment-1',
+      idempotencyKey: 'shared-key',
+      requestFingerprint: 'fingerprint',
+      status: 'pending' as const,
+      resultingCommentId: null,
+      failureCode: null,
+      createdAt: '2026-08-01T10:00:00.000Z',
+      completedAt: null,
+    };
+
+    await operations.claim(outer, claim);
+    const other = await operations.claim(inner, { ...claim, id: crypto.randomUUID() });
+
+    expect(other.claimed).toBe(true);
+    await expect(operations.findByIdempotencyKey(inner, 'shared-key')).resolves.toMatchObject({
+      accountId: inner.accountId,
+    });
+  });
+
   it('walks pages in keyset order without repeating or skipping', async () => {
     const comments = repository();
 

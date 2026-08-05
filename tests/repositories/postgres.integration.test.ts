@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -247,19 +249,215 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     // The repository predicates are removed here on purpose. Only row-level
     // security can produce an empty result, so this is what distinguishes
     // working RLS from predicates that merely look like isolation.
+    //
+    // Every tenant-scoped table is covered, not only the two the read path
+    // touches: the perimeter is only as good as its least-guarded table
+    // (Spec-018).
     const rows = await database.withTenant(tenantA.accountId, async (tx) => {
-      const comments = await tx.query<{ count: string }>(
-        `select count(*)::text as count from comments where post_id = $1`,
-        [tenantB.postId],
-      );
-      const posts = await tx.query<{ count: string }>(
-        `select count(*)::text as count from posts where id = $1`,
-        [tenantB.postId],
-      );
-      return { comments: comments.rows[0]!.count, posts: posts.rows[0]!.count };
+      const count = async (sql: string, parameters: readonly unknown[]) =>
+        (await tx.query<{ count: string }>(sql, parameters)).rows[0]!.count;
+      return {
+        comments: await count(`select count(*)::text as count from comments where post_id = $1`, [
+          tenantB.postId,
+        ]),
+        posts: await count(`select count(*)::text as count from posts where id = $1`, [
+          tenantB.postId,
+        ]),
+        socialAccounts: await count(
+          `select count(*)::text as count from social_accounts where id = $1`,
+          [tenantB.socialAccountId],
+        ),
+        replyOperations: await count(
+          `select count(*)::text as count from reply_operations where account_id = $1`,
+          [tenantB.accountId],
+        ),
+        accounts: await count(`select count(*)::text as count from accounts where id = $1`, [
+          tenantB.accountId,
+        ]),
+      };
     });
 
-    expect(rows).toEqual({ comments: '0', posts: '0' });
+    expect(rows).toEqual({
+      comments: '0',
+      posts: '0',
+      socialAccounts: '0',
+      replyOperations: '0',
+      accounts: '0',
+    });
+  });
+
+  it('shows a tenant exactly one account row: its own', async () => {
+    // Nothing queries accounts today, which is why the policy is worth having.
+    // The next query is written by someone who assumes the perimeter is whole.
+    const rows = await database.withTenant(
+      tenantA.accountId,
+      async (tx) => (await tx.query<{ id: string }>(`select id from accounts`)).rows,
+    );
+
+    expect(rows.map((row) => row.id)).toEqual([tenantA.accountId]);
+  });
+
+  it('runs as a role holding neither SUPERUSER nor BYPASSRLS', async () => {
+    // Both attributes exempt a role from every policy unconditionally, so a
+    // role that has drifted turns each isolation test above into a test of
+    // nothing. This fails loudly instead.
+    const row = await database.withTenant(
+      tenantA.accountId,
+      async (tx) =>
+        (
+          await tx.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
+            `select rolsuper, rolbypassrls from pg_roles where rolname = current_user`,
+          )
+        ).rows[0],
+    );
+
+    expect(row).toEqual({ rolsuper: false, rolbypassrls: false });
+  });
+
+  it('corrects a service role that already exists with elevated rights', async () => {
+    // Migration 002 skips creation when the name is taken, so a pre-existing
+    // comments_app holding SUPERUSER silently defeated every policy while the
+    // migration reported success. The statement under test is read out of the
+    // migration itself, so removing it from the migration fails this test.
+    // Read from the repository root, which is vitest's working directory.
+    const migration = await readFile(
+      'migrations/006_isolation_and_schema_completeness.sql',
+      'utf8',
+    );
+    const pin = /^alter role comments_app .+;$/m.exec(migration)?.[0];
+    expect(pin).toBeDefined();
+
+    const owner = new Client({ connectionString: ownerUrl });
+    await owner.connect();
+    try {
+      await owner.query('alter role comments_app superuser bypassrls');
+      const drifted = await owner.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
+        `select rolsuper, rolbypassrls from pg_roles where rolname = 'comments_app'`,
+      );
+      expect(drifted.rows[0]).toEqual({ rolsuper: true, rolbypassrls: true });
+
+      await owner.query(pin!);
+
+      const corrected = await owner.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
+        `select rolsuper, rolbypassrls from pg_roles where rolname = 'comments_app'`,
+      );
+      expect(corrected.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
+    } finally {
+      // Never leave the cluster with an elevated service role, whatever failed.
+      await owner.query('alter role comments_app nosuperuser nobypassrls').catch(() => undefined);
+      await owner.end();
+    }
+  });
+
+  it('rejects a platform the domain does not support, at the database', async () => {
+    const owner = new Client({ connectionString: ownerUrl });
+    await owner.connect();
+    try {
+      await expect(
+        owner.query(
+          `insert into social_accounts
+             (id, account_id, platform, external_account_id, credential_reference)
+           values ($1, $2, 'myspace', 'ms-account', 'secret://social/myspace/x')`,
+          [crypto.randomUUID(), tenantA.accountId],
+        ),
+      ).rejects.toThrow(/social_accounts_platform_check/);
+    } finally {
+      await owner.end();
+    }
+  });
+
+  it('indexes every reply-operation foreign key and states its delete behaviour', async () => {
+    const owner = new Client({ connectionString: ownerUrl });
+    await owner.connect();
+    try {
+      // PostgreSQL indexes the referenced side of a foreign key, never the
+      // referencing side, so an unindexed one is a sequential scan on lookup
+      // and on any delete of the parent row.
+      const indexed = await owner.query<{ indexdef: string }>(
+        `select indexdef from pg_indexes where tablename = 'reply_operations'`,
+      );
+      const definitions = indexed.rows.map((row) => row.indexdef).join('\n');
+      expect(definitions).toContain('comment_id');
+      expect(definitions).toContain('resulting_comment_id');
+
+      // No foreign key may be left on the default: deletion semantics are a
+      // decision, and 'a' is PostgreSQL's "nobody chose".
+      const actions = await owner.query<{ conname: string; confdeltype: string }>(
+        `select conname, confdeltype from pg_constraint
+         where contype = 'f'
+           and conrelid in ('accounts'::regclass, 'social_accounts'::regclass,
+                            'posts'::regclass, 'comments'::regclass,
+                            'reply_operations'::regclass)`,
+      );
+      const byName = Object.fromEntries(actions.rows.map((row) => [row.conname, row.confdeltype]));
+      expect(byName['comments_post_id_fkey']).toBe('c');
+      expect(byName['reply_operations_comment_id_fkey']).toBe('a');
+      expect(byName['reply_operations_resulting_comment_id_fkey']).toBe('a');
+      expect(byName['comments_account_id_fkey']).toBe('c');
+    } finally {
+      await owner.end();
+    }
+  });
+
+  it('refuses to delete a comment a reply operation still records', async () => {
+    // The row records something published under a customer's name. Losing it
+    // silently to a cascade is worse than an explicit failure (Spec-018).
+    const owner = new Client({ connectionString: ownerUrl });
+    await owner.connect();
+    try {
+      const [stored] = await comments.upsertMany(contextA, [
+        comment(tenantA, `delete-guard-${crypto.randomUUID()}`, '2026-08-01T14:00:00.000Z'),
+      ]);
+      await operations.claim(contextA, {
+        id: crypto.randomUUID(),
+        commentId: stored!.id,
+        idempotencyKey: `delete-guard-${crypto.randomUUID()}`,
+        requestFingerprint: 'fingerprint',
+        status: 'pending',
+        resultingCommentId: null,
+        failureCode: null,
+        createdAt: new Date().toISOString(),
+        completedAt: null,
+      });
+
+      await expect(owner.query(`delete from comments where id = $1`, [stored!.id])).rejects.toThrow(
+        /reply_operations/,
+      );
+    } finally {
+      await owner.end();
+    }
+  });
+
+  it('removes a post comments when the post itself is deleted', async () => {
+    // A comment is a snapshot of that post's conversation and has no meaning
+    // without it, so the cascade is the deliberate choice here.
+    const owner = new Client({ connectionString: ownerUrl });
+    await owner.connect();
+    try {
+      const postId = crypto.randomUUID();
+      await owner.query(
+        `insert into posts (id, account_id, social_account_id, external_post_id, status, published_at)
+         values ($1, $2, $3, $4, 'published', now())`,
+        [postId, tenantA.accountId, tenantA.socialAccountId, `cascade-${postId}`],
+      );
+      await owner.query(
+        `insert into comments
+           (account_id, post_id, social_account_id, external_comment_id,
+            author_external_id, author_display_name, body, published_at, updated_at)
+         values ($1, $2, $3, $4, 'author', 'Ada Lovelace', 'body', now(), now())`,
+        [tenantA.accountId, postId, tenantA.socialAccountId, `cascade-comment-${postId}`],
+      );
+
+      await owner.query(`delete from posts where id = $1`, [postId]);
+
+      const remaining = await owner.query<{ count: string }>(
+        `select count(*)::text as count from comments where post_id = $1`,
+        [postId],
+      );
+      expect(remaining.rows[0]!.count).toBe('0');
+    } finally {
+      await owner.end();
+    }
   });
 
   it('refuses to write a row belonging to another tenant', async () => {

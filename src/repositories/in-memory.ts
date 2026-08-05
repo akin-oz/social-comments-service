@@ -18,8 +18,37 @@ import type {
   ReplyOperationRepository,
 } from '../comments/contracts.js';
 
-function scopedKey(accountId: string, id: string): string {
-  return `${accountId}:${id}`;
+/**
+ * Per-tenant storage that cannot match across a delimiter.
+ *
+ * The previous scheme flattened `(accountId, id)` into one `accountId:id`
+ * string and scoped reads with `startsWith`. Composite string keys are exactly
+ * the shape that leaks: an account identifier containing the delimiter can be
+ * a prefix of another tenant's key, and a prefix match is a weaker check than
+ * it looks. A map per tenant makes the boundary structural, which is the
+ * closest an in-memory adapter gets to the database policy behind the
+ * PostgreSQL composition (Spec-018).
+ */
+class TenantScoped<T> {
+  private readonly byTenant = new Map<string, Map<string, T>>();
+
+  public get(accountId: string, id: string): T | undefined {
+    return this.byTenant.get(accountId)?.get(id);
+  }
+
+  public set(accountId: string, id: string, value: T): void {
+    let scope = this.byTenant.get(accountId);
+    if (scope === undefined) {
+      scope = new Map<string, T>();
+      this.byTenant.set(accountId, scope);
+    }
+    scope.set(id, value);
+  }
+
+  /** Everything one tenant can see, and nothing any other tenant stored. */
+  public values(accountId: string): readonly T[] {
+    return [...(this.byTenant.get(accountId)?.values() ?? [])];
+  }
 }
 
 function keysetOf(comment: Comment): CommentKeyset {
@@ -41,9 +70,9 @@ interface StoredComment {
 }
 
 export class InMemoryCommentRepository implements CommentRepository {
-  private readonly byId = new Map<string, StoredComment>();
+  private readonly byId = new TenantScoped<StoredComment>();
   /** Provider identity to assigned identity, mirroring the SQL unique constraint. */
-  private readonly byExternalId = new Map<string, string>();
+  private readonly byExternalId = new TenantScoped<string>();
 
   public constructor(
     seed: readonly ObservedComment[] = [],
@@ -53,14 +82,13 @@ export class InMemoryCommentRepository implements CommentRepository {
   }
 
   public async listByPost(context: TenantContext, query: ListCommentsQuery): Promise<CommentPage> {
-    const ordered = [...this.byId.entries()]
+    const ordered = this.byId
+      .values(context.accountId)
       .filter(
-        ([key, stored]) =>
-          key.startsWith(`${context.accountId}:`) &&
-          stored.observed.postId === query.postId &&
-          stored.observed.platform === query.platform,
+        (stored) =>
+          stored.observed.postId === query.postId && stored.observed.platform === query.platform,
       )
-      .map(([, stored]) => this.toComment(context.accountId, stored))
+      .map((stored) => this.toComment(context.accountId, stored))
       .sort((left, right) => compareKeyset(keysetOf(left), keysetOf(right)));
 
     const after = query.after;
@@ -75,7 +103,7 @@ export class InMemoryCommentRepository implements CommentRepository {
   }
 
   public async findById(context: TenantContext, commentId: string): Promise<Comment | null> {
-    const stored = this.byId.get(scopedKey(context.accountId, commentId));
+    const stored = this.byId.get(context.accountId, commentId);
     return stored ? this.toComment(context.accountId, stored) : null;
   }
 
@@ -83,7 +111,7 @@ export class InMemoryCommentRepository implements CommentRepository {
     context: TenantContext,
     commentId: string,
   ): Promise<string | null> {
-    return this.byId.get(scopedKey(context.accountId, commentId))?.observed.externalId ?? null;
+    return this.byId.get(context.accountId, commentId)?.observed.externalId ?? null;
   }
 
   public async upsertMany(
@@ -98,11 +126,10 @@ export class InMemoryCommentRepository implements CommentRepository {
 
   /** Assigns an identity, or reuses the one this provider comment already has. */
   private store(accountId: string, observed: ObservedComment): StoredComment {
-    const externalKey = scopedKey(accountId, observed.externalId);
-    const id = this.byExternalId.get(externalKey) ?? crypto.randomUUID();
+    const id = this.byExternalId.get(accountId, observed.externalId) ?? crypto.randomUUID();
     const stored: StoredComment = { id, observed };
-    this.byExternalId.set(externalKey, id);
-    this.byId.set(scopedKey(accountId, id), stored);
+    this.byExternalId.set(accountId, observed.externalId, id);
+    this.byId.set(accountId, id, stored);
     return stored;
   }
 
@@ -118,9 +145,7 @@ export class InMemoryCommentRepository implements CommentRepository {
       // The parent is whatever row holds that provider identifier, not a value
       // computed from it (ADR-0013).
       parentCommentId:
-        parentExternal === null
-          ? null
-          : (this.byExternalId.get(scopedKey(accountId, parentExternal)) ?? null),
+        parentExternal === null ? null : (this.byExternalId.get(accountId, parentExternal) ?? null),
       publishedAt: observed.publishedAt,
       updatedAt: observed.updatedAt,
     };
@@ -129,7 +154,7 @@ export class InMemoryCommentRepository implements CommentRepository {
 
 export class InMemoryPostRepository implements PostRepository {
   private readonly posts = new Map<string, PublishedPost>();
-  private readonly snapshots = new Map<string, PostSnapshotState>();
+  private readonly snapshots = new TenantScoped<PostSnapshotState>();
 
   public constructor(seed: readonly PublishedPost[] = []) {
     for (const post of seed) this.posts.set(post.id, post);
@@ -143,7 +168,7 @@ export class InMemoryPostRepository implements PostRepository {
     if (post?.accountId !== context.accountId) return null;
     // An unseen post has read nothing of its provider stream, so it is not
     // exhausted and the first read hydrates.
-    const snapshot = this.snapshots.get(scopedKey(context.accountId, postId)) ?? {
+    const snapshot = this.snapshots.get(context.accountId, postId) ?? {
       providerCursor: null,
       exhausted: false,
       completedAt: null,
@@ -156,19 +181,19 @@ export class InMemoryPostRepository implements PostRepository {
     postId: string,
     state: PostSnapshotState,
   ): Promise<void> {
-    this.snapshots.set(scopedKey(context.accountId, postId), state);
+    this.snapshots.set(context.accountId, postId, state);
   }
 }
 
 export class InMemoryReplyOperationRepository implements ReplyOperationRepository {
-  private readonly operations = new Map<string, ReplyOperation>();
+  private readonly operations = new TenantScoped<ReplyOperation>();
   /**
    * Idempotency key to operation id. This index is what plays the role the
    * unique constraint plays in PostgreSQL: without it the claim had to scan by
    * key, and the scan sat behind an `await`, so two concurrent callers both
    * passed the check and both were granted the same key.
    */
-  private readonly claimedKeys = new Map<string, string>();
+  private readonly claimedKeys = new TenantScoped<string>();
 
   public async findByIdempotencyKey(
     context: TenantContext,
@@ -186,15 +211,15 @@ export class InMemoryReplyOperationRepository implements ReplyOperationRepositor
     const existing = this.byIdempotencyKey(context, operation.idempotencyKey);
     if (existing) return { operation: existing, claimed: false };
     const stored: ReplyOperation = { ...operation, accountId: context.accountId };
-    this.claimedKeys.set(scopedKey(context.accountId, operation.idempotencyKey), operation.id);
-    this.operations.set(scopedKey(context.accountId, operation.id), stored);
+    this.claimedKeys.set(context.accountId, operation.idempotencyKey, operation.id);
+    this.operations.set(context.accountId, operation.id, stored);
     return { operation: stored, claimed: true };
   }
 
   private byIdempotencyKey(context: TenantContext, key: string): ReplyOperation | null {
-    const id = this.claimedKeys.get(scopedKey(context.accountId, key));
+    const id = this.claimedKeys.get(context.accountId, key);
     if (id === undefined) return null;
-    return this.operations.get(scopedKey(context.accountId, id)) ?? null;
+    return this.operations.get(context.accountId, id) ?? null;
   }
 
   public async complete(
@@ -227,13 +252,12 @@ export class InMemoryReplyOperationRepository implements ReplyOperationRepositor
     operationId: string,
     changes: Partial<ReplyOperation>,
   ): ReplyOperation {
-    const key = scopedKey(context.accountId, operationId);
-    const operation = this.operations.get(key);
+    const operation = this.operations.get(context.accountId, operationId);
     if (!operation) {
       throw new ServiceError('INTERNAL_ERROR', 'Reply operation was not found.', 500);
     }
     const updated: ReplyOperation = { ...operation, ...changes };
-    this.operations.set(key, updated);
+    this.operations.set(context.accountId, operationId, updated);
     return updated;
   }
 }

@@ -107,7 +107,9 @@ The service is granted `update` on just these two columns; everything else about
 - Unique provider identity within a provider scope, such as `(social_account_id, external_comment_id)`.
 - Unique idempotency key within the authenticated account scope.
 - Index comments by `(post_id, published_at, id)` for deterministic cursor queries.
-- Define deletion and retention behavior before production use.
+- Index the referencing side of every foreign key that is looked up or cascaded through. PostgreSQL indexes only the referenced side.
+- Constrain `platform` at the database, not only in the validator: the column is the shared fact and the validator is one code path.
+- Define deletion and retention behavior before production use. Migration `006` fixes the referential half of it (see below); automated retention remains open.
 - Treat provider payloads and raw error details as sensitive operational data.
 
 ## Tenant context and RLS
@@ -121,4 +123,24 @@ Isolation depends on **which role connects**, not only on the policies existing:
 
 PostgreSQL exempts superusers and `BYPASSRLS` roles from row-level security unconditionally, and exempts a table's owner unless `FORCE ROW LEVEL SECURITY` is set. Migration `002` sets `FORCE` on the four tenant tables and creates `comments_app`. `FORCE` alone is not sufficient against a superuser owner, which is why the role separation is the primary control and `FORCE` is the safeguard for managed environments where the owner is not a superuser.
 
-Policy behaviour is verified against a real database across two tenants in `tests/repositories/postgres.integration.test.ts`, including a query with its `account_id` predicate deliberately removed. That case is what distinguishes working row-level security from repository predicates that merely resemble isolation.
+Migration `006` closes the two gaps that were left (Spec-018). `comments_app` had its attributes set only at creation, so a role of that name that already existed with `SUPERUSER` or `BYPASSRLS` defeated every policy while the migration reported success; the attributes are now pinned unconditionally on every run. And `accounts` — the one table `comments_app` could read without a policy — now carries one keyed on its own identifier.
+
+Policy behaviour is verified against a real database across two tenants in `tests/repositories/postgres.integration.test.ts`, including a query with its `account_id` predicate deliberately removed, now covering `comments`, `posts`, `social_accounts`, `reply_operations`, and `accounts`. That case is what distinguishes working row-level security from repository predicates that merely resemble isolation. A separate test reads `pg_roles` and fails if the service role has drifted.
+
+## Deletion semantics
+
+Every foreign key states its `ON DELETE` behaviour as of migration `006`. Before that they carried PostgreSQL's default, which meant deletion behaviour was whatever the default happened to be rather than a decision anyone made.
+
+The rule: **deleting a tenant removes everything that tenant owns, and within a tenant a post owns its comments — but the record of something published under a customer's name does not disappear quietly.**
+
+| Foreign key                                      | On delete   | Why                                                               |
+| ------------------------------------------------ | ----------- | ----------------------------------------------------------------- |
+| every `account_id`                               | `cascade`   | Deleting a tenant is a whole-tenant operation.                    |
+| `posts.social_account_id`                        | `cascade`   | A post has no meaning without the connection it went out through. |
+| `comments.post_id`, `comments.social_account_id` | `cascade`   | A comment is a snapshot of that post's conversation.              |
+| `reply_operations.comment_id`                    | `no action` | The row records a publication under a customer's name.            |
+| `reply_operations.resulting_comment_id`          | `no action` | As above.                                                         |
+
+`reply_operations` uses `NO ACTION` rather than `RESTRICT` deliberately. Both refuse to let a comment be deleted while an operation references it; they differ in when the check runs. `RESTRICT` fires immediately and would make deleting a whole account impossible, because that account's cascade removes the operations and the comments in the same statement. `NO ACTION` defers to the end of the statement, by which point the operations are already gone. Deleting one comment with a reply behind it fails; deleting a tenant succeeds.
+
+Automated retention — how long a snapshot or an audit row is kept — remains an open operational decision recorded in [operations.md](operations.md).
