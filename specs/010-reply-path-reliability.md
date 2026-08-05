@@ -12,7 +12,7 @@ owner: platform-integration
 
 The reply-to-comment path has three correctness and operational gaps:
 
-1. **No provider timeouts**: The `withRetry` utility ([observability.ts](../../src/shared/observability.ts)) has no call-site timeout, so a hanging provider can block indefinitely.
+1. **No provider timeouts**: The `withRetry` utility ([observability.ts](../src/shared/observability.ts)) has no call-site timeout, so a hanging provider can block indefinitely.
 2. **Ignores rate-limit signals**: The retry policy treats `ProviderUnavailableError` as retriable but does not honor HTTP `Retry-After` headers or provider-specific backoff guidance.
 3. **Concurrent retry race**: Two simultaneous requests with the same idempotency key can both pass the `findByIdempotencyKey` check and both attempt provider calls, leading to duplicate replies.
 4. **Failure-code taxonomy drift**: The service captures `error.name` as `failureCode`, which stores `"ServiceError"` instead of the documented API error codes (e.g., `"PROVIDER_RATE_LIMITED"`).
@@ -22,7 +22,7 @@ Together, these can cause silent duplicate replies or operational timeouts under
 ## Context and assumptions
 
 - **A-009**: Idempotency is required for writes; clients provide an idempotency key.
-- **[operations.md](../../docs/operations.md)**: Retries must be limited to safe, transient failures and remain idempotency-aware. A reply operation is persisted before provider publication and completed after storage.
+- **[operations.md](../docs/operations.md)**: Retries must be limited to safe, transient failures and remain idempotency-aware. A reply operation is persisted before provider publication and completed after storage.
 - The schema already captures `failure_code` for audit and retry decisions.
 - Rate-limit errors are known at the provider level and should be communicated to the caller and honored in retry delay.
 

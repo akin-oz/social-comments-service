@@ -16,9 +16,9 @@ The system needs stable identifiers across three layers:
 
 The current implementation is inconsistent:
 
-1. The adaptive provider builds domain IDs as `platform:externalId` (e.g., `instagram:17999999999999999`) ([adaptive-provider.ts:85](../../src/platforms/adaptive-provider.ts:85)).
-2. The database schema declares `comments.id uuid` ([001_initial_schema.sql:29](../../migrations/001_initial_schema.sql:29)), expecting UUID values.
-3. The `replyToComment` handler passes the domain ID directly to the provider as if it were an external ID ([adaptive-provider.ts:71](../../src/platforms/adaptive-provider.ts:71)).
+1. The adaptive provider builds domain IDs as `platform:externalId` (e.g., `instagram:17999999999999999`) ([adaptive-provider.ts:85](../../src/platforms/adaptive-provider.ts)).
+2. The database schema declares `comments.id uuid` ([001_initial_schema.sql:29](../../migrations/001_initial_schema.sql)), expecting UUID values.
+3. The `replyToComment` handler passes the domain ID directly to the provider as if it were an external ID ([adaptive-provider.ts:71](../../src/platforms/adaptive-provider.ts)).
 4. There is no comment-ID resolver equivalent to the existing `postIdResolver`.
 
 This will cause INSERT failures at runtime and prevent reply-to-comment from working against any real provider.

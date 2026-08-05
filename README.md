@@ -183,8 +183,10 @@ CI runs `pnpm ai:validate` alongside typecheck, lint, formatting, and tests, so 
 
 ## Status
 
-All thirteen approved specifications are implemented. Retrieving comments for a published post and replying to a comment both work end to end, on PostgreSQL and on in-memory adapters, demonstrable with the commands above.
+All twenty approved specifications and fourteen ADRs are implemented. Retrieving comments for a published post and replying to a comment both work end to end, on PostgreSQL and on in-memory adapters, demonstrable with the commands above.
 
-The PostgreSQL adapter is exercised against a real database. Tenant isolation is proven by a test that removes the repository's own `account_id` predicate and confirms another tenant's rows stay invisible, and CI runs that suite against a PostgreSQL service container.
+The PostgreSQL adapter is exercised against a real database. Tenant isolation is proven by a test that removes the repository's own `account_id` predicate and confirms another tenant's rows stay invisible across all five tenant-scoped tables, by a second test that reads `pg_roles` to confirm the service role holds neither `SUPERUSER` nor `BYPASSRLS`, and by a third that deliberately drifts that role and asserts the migration corrects it. CI runs the suite against a PostgreSQL service container.
+
+The last review board found eighteen items. Five were already fixed and double-counted; the rest are closed, each under an approved specification: the reply operation's lease and its `unknown` terminal state ([Spec-015](specs/015-reply-operation-lifecycle.md)), the authorised connection the provider port had nowhere to put ([Spec-016](specs/016-provider-authorization-context.md)), machine-readable error reasons and the `/v2` compatibility policy ([Spec-017](specs/017-client-actionable-errors.md)), the isolation and schema gaps above ([Spec-018](specs/018-isolation-and-schema-completeness.md)), single-flight hydration ([Spec-019](specs/019-provider-load-protection.md)), the five surviving test mutations ([Spec-020](specs/020-test-integrity.md)), and the reply-depth invariant that was documented but never enforced ([ADR-0014](docs/decisions/0014-reply-depth.md)).
 
 One thing is deliberately not done: no live provider SDK is selected, so the runnable adapter is a deterministic fixture. The [capability matrix](docs/provider-capability-matrix.md) records what the five real platforms document, from vendor documentation rather than integration testing. [docs/roadmap.md](docs/roadmap.md) tracks what remains.

@@ -179,7 +179,7 @@ Two implementation outcomes diverge from their approved text and are recorded in
 
 ## Milestone 10 — Submission readiness
 
-Status: In progress
+Status: Done
 
 ### Goal
 
@@ -207,4 +207,36 @@ Schema, API design, code, assumptions, and the AI disclosure are all present, an
 
 Nothing blocks submission. The README now states the seven decisions that shaped the service, what each cost, and what was deliberately left out, with links into the ADRs and specifications for depth.
 
-The capability matrix is now grounded in vendor documentation for all five platforms, which both justifies the provider abstraction and raises three items recorded in `docs/tasks.md`: the identifier-uniqueness assumption in ADR-0010 is weaker than claimed, assumption A-005 does not hold for X, and Spec-013 stores provider cursors that Meta documents against. Each needs an ADR or spec before a live adapter is written; none blocks submission.
+The capability matrix is grounded in vendor documentation for all five platforms, which both justifies the provider abstraction and raised three items. All three are now closed: ADR-0013 replaced the identifier derivation with assigned identity, Spec-014 made the stored provider cursor best-effort with a restart on rejection, and ADR-0014 turned A-005 from an assumption about platforms into an enforced normalisation of this service's own.
+
+## Milestone 11 — Review-board findings
+
+Status: Done
+
+### Goal
+
+Close what two read-only review boards found by re-applying real defects, rather than by reading for style.
+
+### What was found and what happened
+
+Eighteen items. Five were already fixed and double-counted across the two reports, which is itself worth recording: a backlog that reports closed work as open is the same claim decay the boards exist to catch. The remaining thirteen were closed under seven approved documents.
+
+| Finding                                                       | Closed by | Proved by                                                                 |
+| ------------------------------------------------------------- | --------- | ------------------------------------------------------------------------- |
+| A crash between claim and completion poisoned the key forever | Spec-015  | Four mutations of the lease and recovery logic each turn the suite red    |
+| `pending` meant both "in flight" and "outcome unknown"        | Spec-015  | A timeout after send is now `unknown`, a rate limit stays `failed`        |
+| The provider port had nowhere to carry a credential           | Spec-016  | Two tenants on one platform reach the provider with different connections |
+| `IDEMPOTENCY_CONFLICT` was three situations behind one code   | Spec-017  | Four distinct reasons, asserted; the enum cannot drift from the schema    |
+| `Retry-After` and the cursor rule lived only in prose         | Spec-017  | Both now in the generated document, both asserted                         |
+| The service role's attributes were never pinned               | Spec-018  | A test drifts the role to `SUPERUSER` and asserts the migration fixes it  |
+| `accounts` had no row-level security                          | Spec-018  | The predicate-removed proof covers all five tenant-scoped tables          |
+| The in-memory adapter scoped tenants by prefix match          | Spec-018  | An account identifier containing the delimiter cannot cross the boundary  |
+| Deletion semantics and the platform constraint were undefined | Spec-018  | Stated in migration 006 and in `docs/database.md`                         |
+| Concurrent readers multiplied provider load                   | Spec-019  | Five concurrent cold reads now cost the provider traffic of one           |
+| Five test mutations survived a green suite                    | Spec-020  | Each re-applied and shown to turn the suite red                           |
+| A broken test glob produced a green build running zero tests  | Spec-020  | A spawned run with a deliberately broken glob must fail                   |
+| A-005 was documented but unenforced                           | ADR-0014  | Replying to a reply is refused; neutralising the check fails two tests    |
+
+### Definition of done
+
+Every finding either closed with a demonstrated failing mutation, or recorded as a deliberate limitation with its reasoning. Two limitations are recorded rather than fixed: single-flight deduplication is per replica, and the model still cannot represent a reply whose resolved parent differs from the requested one, which Instagram does silently.

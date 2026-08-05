@@ -15,10 +15,10 @@ The current implementation uses offset-based pagination by encoding a numeric of
 Offset-based pagination is unstable:
 
 - If a comment is added or removed between requests, the offset becomes misaligned.
-- The example in [api-design.md](../../docs/api-design.md) shows `{"offset":25}` base64-encoded, which reveals pagination semantics.
+- The example in [api-design.md](../docs/api-design.md) shows `{"offset":25}` base64-encoded, which reveals pagination semantics.
 - Keyset pagination (cursor based on `(published_at, id)`) is stable and deterministic.
 
-The database schema already has the ideal index: `comments_post_cursor_idx on comments (account_id, post_id, published_at, id)` ([001_initial_schema.sql:44](../../migrations/001_initial_schema.sql:44)).
+The database schema already has the ideal index: `comments_post_cursor_idx on comments (account_id, post_id, published_at, id)` ([001_initial_schema.sql:44](../migrations/001_initial_schema.sql)).
 
 ## Context and assumptions
 
