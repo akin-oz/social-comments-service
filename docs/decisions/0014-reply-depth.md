@@ -1,7 +1,7 @@
 ---
 adr: 0014
 title: Normalise reply depth to one level, and enforce it
-status: proposed
+status: accepted
 ---
 
 # ADR-0014: Normalise reply depth to one level, and enforce it

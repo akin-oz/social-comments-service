@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import {
   NotFoundError,
   ProviderCursorRejectedError,
+  ReplyDepthExceededError,
   ServiceError,
   toFailureCode,
 } from '../shared/errors.js';
@@ -210,6 +211,17 @@ export class CommentService {
       this.metrics.increment('comments.reply.failure', { code: 'COMMENT_NOT_FOUND' });
       throw new NotFoundError('COMMENT_NOT_FOUND', 'The requested comment was not found.');
     }
+    // One level is a normalisation this service chose, not a platform rule
+    // (ADR-0014): X and Facebook nest arbitrarily. The stored parent already
+    // says whether it is itself a reply, so enforcing it costs no round trip.
+    if (comment.parentCommentId !== null) {
+      this.metrics.increment('comments.reply.failure', {
+        platform: comment.platform,
+        code: 'REPLY_DEPTH_EXCEEDED',
+      });
+      throw new ReplyDepthExceededError();
+    }
+
     const postRecord = await this.posts.findPublishedById(context, comment.postId);
     if (!postRecord) {
       throw new NotFoundError('POST_NOT_FOUND', 'The post for this comment was not found.');

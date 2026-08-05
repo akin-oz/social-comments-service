@@ -18,9 +18,11 @@ Provider APIs are authoritative for newly retrieved comments and published repli
 
 The scheduling platform can resolve an internal `postId` to its platform and external post identifier. The public API does not require clients to know provider-specific post IDs.
 
-## A-005: Replies are one level deep
+## A-005: This service exposes one level of replies
 
-The first version supports replying to a comment, but does not model arbitrary nested conversation trees. Provider behavior that allows deeper nesting is normalized to a single reply level unless the contract is expanded.
+One level is a normalization this service chose, not a fact about the platforms. Instagram and YouTube enforce a single level themselves; LinkedIn implies two; Facebook states no limit; on X a reply is a Post and threads nest arbitrarily deep. Beneath the normalization those differences remain, and a conversation deeper than one level is flattened rather than represented.
+
+The invariant is enforced at the application boundary rather than assumed: replying to a comment that is itself a reply is refused with `REPLY_DEPTH_EXCEEDED`. Expanding the contract to nested threads is a product decision requiring a new ADR. See [ADR-0014](decisions/0014-reply-depth.md).
 
 ## A-006: Webhook synchronization is out of scope
 

@@ -77,7 +77,7 @@ The PostgreSQL repository is now exercised against a real database. Running it s
 Reading the vendor documentation surfaced three items that need a decision before a live adapter is written. Each changes an approved document, so each needs an ADR or spec rather than a quiet edit.
 
 - [x] **Comment identity needed correcting.** Resolved by ADR-0013, which supersedes ADR-0010 and assigns identity rather than folding the social account into a derivation.
-- [ ] **Assumption A-005 does not hold for X.** Specified as [ADR-0014](decisions/0014-reply-depth.md): normalise to one level deliberately and enforce it, rather than assuming it. Instagram and YouTube enforce one level, LinkedIn implies two, Facebook states no limit, and X threads arbitrarily deep.
+- [x] **Assumption A-005 does not hold for X.** Closed by [ADR-0014](decisions/0014-reply-depth.md). One level is now stated as this service's normalisation rather than a claim about platforms, and it is enforced: replying to a comment that is itself a reply is refused with `REPLY_DEPTH_EXCEEDED` (422). Neutralising the check turns two tests red. Instagram's silent reattachment of a reply-to-a-reply remains unmodelled and is recorded in the capability matrix.
 - [x] **Spec-013 persisted provider cursors, which Meta documents against.** Spec-014 keeps the stored continuation but treats it as best-effort: a rejected cursor restarts the stream, and the public cursor no longer carries a provider token at all.
 
 ## Raised by the delivery-readiness review

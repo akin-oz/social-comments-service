@@ -1,8 +1,8 @@
 ---
 spec: 015
 title: Make a reply operation recoverable and its outcome honest
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: platform-integration
 depends_on:
   - Spec-010

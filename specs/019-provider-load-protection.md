@@ -1,8 +1,8 @@
 ---
 spec: 019
 title: Stop concurrent readers multiplying provider load
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: platform-integration
 depends_on:
   - Spec-014

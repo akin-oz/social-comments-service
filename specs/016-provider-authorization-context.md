@@ -1,8 +1,8 @@
 ---
 spec: 016
 title: Give the provider port somewhere to carry a credential
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: platform-integration
 depends_on:
   - Spec-002

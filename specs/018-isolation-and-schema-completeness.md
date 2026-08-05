@@ -1,8 +1,8 @@
 ---
 spec: 018
 title: Finish tenant isolation and close the schema gaps behind it
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: platform and operations
 depends_on:
   - ADR-0012

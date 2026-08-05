@@ -1,8 +1,8 @@
 ---
 spec: 020
 title: Close the gaps where a real defect would keep the suite green
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: verification
 depends_on:
   - Spec-005

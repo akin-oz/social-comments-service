@@ -4,6 +4,7 @@ export type ServiceErrorCode =
   | 'POST_NOT_FOUND'
   | 'COMMENT_NOT_FOUND'
   | 'IDEMPOTENCY_CONFLICT'
+  | 'REPLY_DEPTH_EXCEEDED'
   | 'UNSUPPORTED_CAPABILITY'
   | 'PROVIDER_RATE_LIMITED'
   | 'PROVIDER_ERROR'
@@ -26,6 +27,22 @@ export class ServiceError extends Error {
 export class NotFoundError extends ServiceError {
   public constructor(code: 'POST_NOT_FOUND' | 'COMMENT_NOT_FOUND', message: string) {
     super(code, message, 404);
+  }
+}
+
+/**
+ * The parent named by the request is itself a reply. One level is this
+ * service's normalisation rather than any platform's rule (ADR-0014), so the
+ * refusal is the service's own and is reported as such.
+ */
+export class ReplyDepthExceededError extends ServiceError {
+  public constructor() {
+    super(
+      'REPLY_DEPTH_EXCEEDED',
+      'This service models one level of replies; the requested parent is itself a reply.',
+      422,
+    );
+    this.name = 'ReplyDepthExceededError';
   }
 }
 

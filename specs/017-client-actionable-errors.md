@@ -1,8 +1,8 @@
 ---
 spec: 017
 title: Make every error tell a client what to do next
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: api
 depends_on:
   - Spec-011

@@ -404,6 +404,30 @@ describe('replying to a comment', () => {
     expect(operation?.status).toBe('pending');
   });
 
+  it('refuses to reply to a reply, because the model exposes one level', async () => {
+    // The reply just published is itself a reply, so it is the natural parent
+    // for the case ADR-0014 refuses. Nothing enforced this before: the service
+    // would happily build a tree deeper than the contract can express.
+    const { service, parentId } = await withCachedComments();
+    const reply = await service.replyToComment(tenant, parentId, 'Thank you!', 'key-1');
+    expect(reply.parentCommentId).toBe(parentId);
+
+    await expect(
+      service.replyToComment(tenant, reply.id, 'And one more thing', 'key-2'),
+    ).rejects.toMatchObject({ code: 'REPLY_DEPTH_EXCEEDED', statusCode: 422 });
+  });
+
+  it('does not consume the idempotency key when it refuses on depth', async () => {
+    const { service, operations, client, parentId } = await withCachedComments();
+    const reply = await service.replyToComment(tenant, parentId, 'Thank you!', 'key-1');
+    const callsBefore = client.replyCalls;
+
+    await expect(service.replyToComment(tenant, reply.id, 'Deeper', 'key-2')).rejects.toThrow();
+
+    await expect(operations.findByIdempotencyKey(tenant, 'key-2')).resolves.toBeNull();
+    expect(client.replyCalls).toBe(callsBefore);
+  });
+
   it('reports an unknown comment rather than guessing provider coordinates', async () => {
     const { service } = await withCachedComments();
 
