@@ -24,6 +24,8 @@ const enabled = appUrl !== undefined && ownerUrl !== undefined;
 
 const tenantA = seedTenants[0]!;
 const tenantB = seedTenants[1]!;
+/** A different platform, so a platform predicate has something to exclude. */
+const tenantC = seedTenants[2]!;
 const contextA: TenantContext = { accountId: tenantA.accountId };
 const contextB: TenantContext = { accountId: tenantB.accountId };
 
@@ -479,6 +481,80 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     });
     // Another tenant's provider identifier resolves to nothing here.
     await expect(comments.findByExternalId(contextB, externalId)).resolves.toBeNull();
+  });
+
+  it('does not resolve a post that is not published', async () => {
+    // Every fixture was published, so `p.status = 'published'` was mutable to
+    // `p.status is not null` with the whole suite still green (Spec-020).
+    const owner = new Client({ connectionString: ownerUrl });
+    await owner.connect();
+    const draftId = crypto.randomUUID();
+    try {
+      await owner.query(
+        `insert into posts (id, account_id, social_account_id, external_post_id, status, published_at)
+         values ($1, $2, $3, $4, 'draft', null)`,
+        [draftId, tenantA.accountId, tenantA.socialAccountId, `draft-${draftId}`],
+      );
+
+      await expect(posts.findPublishedById(contextA, draftId)).resolves.toBeNull();
+    } finally {
+      await owner.query(`delete from posts where id = $1`, [draftId]).catch(() => undefined);
+      await owner.end();
+    }
+  });
+
+  it('refreshes a comment the provider reports as edited', async () => {
+    // The upsert's `do update set` clause was fully removable with nothing
+    // failing: no fixture ever observed the same comment twice with different
+    // content, so an edited comment would have silently stayed stale.
+    const externalId = `edited-${crypto.randomUUID()}`;
+    const [before] = await comments.upsertMany(contextA, [
+      comment(tenantA, externalId, '2026-08-01T16:00:00.000Z'),
+    ]);
+
+    const [after] = await comments.upsertMany(contextA, [
+      {
+        ...comment(tenantA, externalId, '2026-08-01T16:00:00.000Z'),
+        body: 'edited by its author',
+        author: { id: `author-${externalId}`, displayName: 'Ada L.' },
+        updatedAt: '2026-08-01T17:00:00.000Z',
+      },
+    ]);
+
+    // Same row — identity is stable across observations.
+    expect(after!.id).toBe(before!.id);
+    expect(after!.body).toBe('edited by its author');
+    expect(after!.author.displayName).toBe('Ada L.');
+    expect(after!.updatedAt).toBe('2026-08-01T17:00:00.000Z');
+    // And the refresh is durable, not just present in the returned row.
+    await expect(comments.findById(contextA, before!.id)).resolves.toMatchObject({
+      body: 'edited by its author',
+    });
+  });
+
+  it('keeps one platform comments out of another platform query', async () => {
+    // Every fixture used to be `instagram`, so the platform predicate in both
+    // adapters could be neutralised without a single test noticing.
+    const externalId = `yt-${crypto.randomUUID()}`;
+    const contextC: TenantContext = { accountId: tenantC.accountId };
+    const [stored] = await comments.upsertMany(contextC, [
+      comment(tenantC, externalId, '2026-08-01T18:00:00.000Z'),
+    ]);
+
+    const onYoutube = await comments.listByPost(contextC, {
+      postId: tenantC.postId,
+      platform: 'youtube',
+      limit: 50,
+    });
+    const onInstagram = await comments.listByPost(contextC, {
+      postId: tenantC.postId,
+      platform: 'instagram',
+      limit: 50,
+    });
+
+    expect(onYoutube.items.map((item) => item.id)).toContain(stored!.id);
+    expect(onYoutube.items.every((item) => item.platform === 'youtube')).toBe(true);
+    expect(onInstagram.items).toEqual([]);
   });
 
   it('refuses to delete a comment a reply operation still records', async () => {

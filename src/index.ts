@@ -230,6 +230,26 @@ const secondTenantExternalComments: readonly ExternalCommentRecord[] = [
   },
 ];
 
+/** A second platform in the runnable composition, not only in the matrix. */
+const youtubeExternalComments: readonly ExternalCommentRecord[] = [
+  {
+    externalId: 'yt-comment-1',
+    authorId: 'yt-author-1',
+    authorName: 'Margaret Hamilton',
+    body: 'Great walkthrough — what version is this?',
+    publishedAt: '2026-08-01T10:45:00.000Z',
+    updatedAt: '2026-08-01T10:45:00.000Z',
+  },
+  {
+    externalId: 'yt-comment-2',
+    authorId: 'yt-author-2',
+    authorName: 'Annie Easley',
+    body: 'Subscribed.',
+    publishedAt: '2026-08-01T11:45:00.000Z',
+    updatedAt: '2026-08-01T11:45:00.000Z',
+  },
+];
+
 /**
  * Fixture comments per provider post.
  *
@@ -241,6 +261,7 @@ const secondTenantExternalComments: readonly ExternalCommentRecord[] = [
 const fixtureCommentsByPost = new Map<string, readonly ExternalCommentRecord[]>([
   ['ig-post-1', demoExternalComments],
   ['ig-post-2', secondTenantExternalComments],
+  ['yt-video-1', youtubeExternalComments],
 ]);
 
 /**

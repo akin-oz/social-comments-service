@@ -20,7 +20,13 @@ import {
 } from '../../src/shared/errors.js';
 import type { ProviderCapability } from '../../src/comments/contracts.js';
 import { noopMetrics, providerPolicies, type RetryPolicy } from '../../src/shared/observability.js';
-import { externalComment, post, RecordingLogger, tenant } from '../support/fixtures.js';
+import {
+  externalComment,
+  observedComment,
+  post,
+  RecordingLogger,
+  tenant,
+} from '../support/fixtures.js';
 import type { PublishedPost, RequestContext } from '../../src/shared/types.js';
 
 const immediatePolicy: RetryPolicy = {
@@ -933,6 +939,63 @@ describe('provider authorization context', () => {
     expect(written).not.toContain(post.connection.credentialReference);
     expect(written).not.toContain(postB.connection.credentialReference);
     expect(written).not.toContain('secret://');
+  });
+});
+
+describe('capability and platform gates', () => {
+  it('refuses to read from a provider that cannot list comments', async () => {
+    // `requireCapability(provider, 'list_comments')` was deletable with the
+    // whole suite green: only the reply path's capability check was tested
+    // (Spec-020).
+    const { service, client } = buildService({ capabilities: ['reply_to_comment'] });
+
+    await expect(service.listComments(tenant, post.id, { limit: 25 })).rejects.toMatchObject({
+      code: 'UNSUPPORTED_CAPABILITY',
+      reason: 'capability_unsupported',
+      statusCode: 422,
+    });
+    expect(client.listCalls).toBe(0);
+  });
+
+  it('refuses a platform with no adapter configured', async () => {
+    const service = new CommentService(
+      new InMemoryCommentRepository([], tenant.accountId),
+      new InMemoryPostRepository([post]),
+      new InMemoryReplyOperationRepository(),
+      new InMemoryPlatformProviderRegistry(new Map()),
+    );
+
+    await expect(service.listComments(tenant, post.id, { limit: 25 })).rejects.toMatchObject({
+      code: 'UNSUPPORTED_CAPABILITY',
+      reason: 'platform_not_configured',
+    });
+  });
+
+  it('does not return one platform comments under another platform', async () => {
+    // Every in-memory fixture was `instagram`, so the adapter's platform
+    // predicate could be neutralised without a test noticing.
+    const comments = new InMemoryCommentRepository();
+    await comments.upsertMany(tenant, [
+      observedComment('ig-comment-1', '2026-08-01T10:00:00.000Z'),
+      {
+        ...observedComment('yt-comment-1', '2026-08-01T11:00:00.000Z'),
+        platform: 'youtube',
+      },
+    ]);
+
+    const onInstagram = await comments.listByPost(tenant, {
+      postId: post.id,
+      platform: 'instagram',
+      limit: 50,
+    });
+    const onYoutube = await comments.listByPost(tenant, {
+      postId: post.id,
+      platform: 'youtube',
+      limit: 50,
+    });
+
+    expect(onInstagram.items.map((item) => item.body)).toEqual(['body of ig-comment-1']);
+    expect(onYoutube.items.map((item) => item.body)).toEqual(['body of yt-comment-1']);
   });
 });
 

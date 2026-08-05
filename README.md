@@ -87,6 +87,8 @@ pnpm format:check
 pnpm test
 ```
 
+The integration suites skip without a database; `DATABASE_URL` and `APP_DATABASE_URL` run them. [docs/testing.md](docs/testing.md) explains what each layer covers and the standard a test is held to.
+
 ## Running the service
 
 Two ways, depending on whether you want a real database.
@@ -130,7 +132,7 @@ The expected workflow is:
 1. Update the relevant plan or assumption before changing design-sensitive behavior.
 2. Record significant decisions as ADRs in `docs/decisions/`.
 3. Implement one roadmap milestone at a time behind stable interfaces.
-4. Add unit and integration tests with each behavior change.
+4. Add unit and integration tests with each behavior change, held to the standard in [docs/testing.md](docs/testing.md): if inverting a line of source turns no test red, the test is decoration.
 5. Run the full quality gate before opening a pull request.
 
 ## Roadmap summary
