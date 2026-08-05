@@ -308,7 +308,12 @@ async function upsertComment(
     ],
   );
   if (!result.rows[0]) {
-    throw new ServiceError('POST_NOT_FOUND', 'The comment post was not found.', 404);
+    throw new ServiceError(
+      'POST_NOT_FOUND',
+      'post_not_found',
+      'The comment post was not found.',
+      404,
+    );
   }
 }
 
@@ -373,7 +378,12 @@ export class PostgresReplyOperationRepository implements ReplyOperationRepositor
       );
       const current = existing.rows[0];
       if (!current) {
-        throw new ServiceError('INTERNAL_ERROR', 'Reply operation could not be claimed.', 500);
+        throw new ServiceError(
+          'INTERNAL_ERROR',
+          'internal_error',
+          'Reply operation could not be claimed.',
+          500,
+        );
       }
       return { operation: toOperation(current), claimed: false };
     });
@@ -392,7 +402,13 @@ export class PostgresReplyOperationRepository implements ReplyOperationRepositor
         [externalReplyId, operationId, context.accountId],
       );
       const row = result.rows[0];
-      if (!row) throw new ServiceError('INTERNAL_ERROR', 'Reply operation was not found.', 500);
+      if (!row)
+        throw new ServiceError(
+          'INTERNAL_ERROR',
+          'internal_error',
+          'Reply operation was not found.',
+          500,
+        );
       return toOperation(row);
     });
   }
@@ -459,7 +475,13 @@ export class PostgresReplyOperationRepository implements ReplyOperationRepositor
         [...values, operationId, context.accountId],
       );
       const row = result.rows[0];
-      if (!row) throw new ServiceError('INTERNAL_ERROR', 'Reply operation was not found.', 500);
+      if (!row)
+        throw new ServiceError(
+          'INTERNAL_ERROR',
+          'internal_error',
+          'Reply operation was not found.',
+          500,
+        );
       return toOperation(row);
     });
   }

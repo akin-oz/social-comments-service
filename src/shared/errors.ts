@@ -14,9 +14,49 @@ export type ServiceErrorCode =
   | 'INVALID_REQUEST'
   | 'INTERNAL_ERROR';
 
+/**
+ * What a client should do about an error, in a value rather than in prose
+ * (Spec-017).
+ *
+ * The code says what happened; the reason says which of several situations
+ * behind that code this is, and therefore what to do next. `IDEMPOTENCY_CONFLICT`
+ * is the case that forced this: it covers a client bug, a request in flight, and
+ * a terminal failure, and the only thing distinguishing them was English a
+ * copy-edit could silently change.
+ *
+ * Reasons are globally unique, so a dashboard can group on reason alone. Once a
+ * client branches on one, renaming it is a breaking change.
+ */
+export const serviceErrorReasons = [
+  'missing_account_context',
+  'account_not_permitted',
+  'post_not_found',
+  'comment_not_found',
+  // The four idempotency situations, which is the point of the whole field.
+  'idempotency_key_body_mismatch',
+  'idempotency_key_in_flight',
+  'idempotency_key_failed',
+  'reply_outcome_unknown',
+  'reply_depth_exceeded',
+  'capability_unsupported',
+  'platform_not_configured',
+  'provider_rate_limited',
+  'provider_upstream_error',
+  'provider_cursor_rejected',
+  'provider_unavailable',
+  'cursor_not_issued_by_service',
+  'request_validation_failed',
+  'idempotency_key_missing',
+  'reply_not_stored',
+  'internal_error',
+] as const;
+
+export type ServiceErrorReason = (typeof serviceErrorReasons)[number];
+
 export class ServiceError extends Error {
   public constructor(
     public readonly code: ServiceErrorCode,
+    public readonly reason: ServiceErrorReason,
     message: string,
     public readonly statusCode = 500,
   ) {
@@ -27,7 +67,7 @@ export class ServiceError extends Error {
 
 export class NotFoundError extends ServiceError {
   public constructor(code: 'POST_NOT_FOUND' | 'COMMENT_NOT_FOUND', message: string) {
-    super(code, message, 404);
+    super(code, code === 'POST_NOT_FOUND' ? 'post_not_found' : 'comment_not_found', message, 404);
   }
 }
 
@@ -42,7 +82,7 @@ export class NotFoundError extends ServiceError {
  */
 export class ReplyOutcomeUnknownError extends ServiceError {
   public constructor(message: string) {
-    super('REPLY_OUTCOME_UNKNOWN', message, 409);
+    super('REPLY_OUTCOME_UNKNOWN', 'reply_outcome_unknown', message, 409);
     this.name = 'ReplyOutcomeUnknownError';
   }
 }
@@ -56,6 +96,7 @@ export class ReplyDepthExceededError extends ServiceError {
   public constructor() {
     super(
       'REPLY_DEPTH_EXCEEDED',
+      'reply_depth_exceeded',
       'This service models one level of replies; the requested parent is itself a reply.',
       422,
     );
@@ -66,7 +107,7 @@ export class ReplyDepthExceededError extends ServiceError {
 /** The provider did not answer within its call budget, or refused the connection. */
 export class ProviderUnavailableError extends ServiceError {
   public constructor(message: string) {
-    super('PROVIDER_UNAVAILABLE', message, 503);
+    super('PROVIDER_UNAVAILABLE', 'provider_unavailable', message, 503);
     this.name = 'ProviderUnavailableError';
   }
 }
@@ -74,7 +115,7 @@ export class ProviderUnavailableError extends ServiceError {
 /** The provider returned an upstream failure that is not safe to retry blindly. */
 export class ProviderError extends ServiceError {
   public constructor(message: string) {
-    super('PROVIDER_ERROR', message, 502);
+    super('PROVIDER_ERROR', 'provider_upstream_error', message, 502);
     this.name = 'ProviderError';
   }
 }
@@ -86,7 +127,7 @@ export class ProviderError extends ServiceError {
  */
 export class ProviderCursorRejectedError extends ServiceError {
   public constructor(message: string) {
-    super('PROVIDER_ERROR', message, 502);
+    super('PROVIDER_ERROR', 'provider_cursor_rejected', message, 502);
     this.name = 'ProviderCursorRejectedError';
   }
 }
@@ -100,7 +141,7 @@ export class ProviderRateLimitError extends ServiceError {
     message: string,
     public readonly retryAfterMs: number | null = null,
   ) {
-    super('PROVIDER_RATE_LIMITED', message, 429);
+    super('PROVIDER_RATE_LIMITED', 'provider_rate_limited', message, 429);
     this.name = 'ProviderRateLimitError';
   }
 }
@@ -112,4 +153,10 @@ export class ProviderRateLimitError extends ServiceError {
 export function toFailureCode(error: unknown): ServiceErrorCode {
   if (error instanceof ServiceError) return error.code;
   return 'PROVIDER_ERROR';
+}
+
+/** The reason to report for a failure that carries none of its own. */
+export function toFailureReason(error: unknown): ServiceErrorReason {
+  if (error instanceof ServiceError) return error.reason;
+  return 'provider_upstream_error';
 }

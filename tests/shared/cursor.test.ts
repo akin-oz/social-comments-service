@@ -36,7 +36,12 @@ describe('opaque pagination cursor', () => {
     const invalid = ['not-base64-json', Buffer.from('{}', 'utf8').toString('base64url')];
     for (const value of invalid) {
       expect(() => decodeCursor(value)).toThrowError(
-        new ServiceError('INVALID_CURSOR', 'The pagination cursor is invalid.', 400),
+        new ServiceError(
+          'INVALID_CURSOR',
+          'cursor_not_issued_by_service',
+          'The pagination cursor is invalid.',
+          400,
+        ),
       );
     }
   });

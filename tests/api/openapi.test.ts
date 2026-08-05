@@ -14,6 +14,7 @@ import {
   InMemoryCommentRepository,
   InMemoryPostRepository,
 } from '../../src/repositories/in-memory.js';
+import { serviceErrorReasons } from '../../src/shared/errors.js';
 
 interface OpenApiDocument {
   openapi: string;
@@ -77,6 +78,50 @@ describe('OpenAPI document', () => {
     expect(Object.keys(document.components.schemas)).toEqual(
       expect.arrayContaining(['Comment', 'Pagination', 'Error']),
     );
+    await close();
+  });
+
+  it('declares every reason the service can emit', async () => {
+    // Reasons live in one exported list that both the error type and the schema
+    // derive from, so drift is a compile error rather than a runtime surprise.
+    // This asserts the projection into the published document as well.
+    const { document, close } = await fetchDocument();
+
+    const error = document.components.schemas.Error as {
+      properties: { error: { properties: { reason: { enum: string[] } } } };
+    };
+
+    expect(error.properties.error.properties.reason.enum).toEqual([...serviceErrorReasons]);
+    await close();
+  });
+
+  it('publishes Retry-After on the rate-limited response', async () => {
+    // Prose said so from the beginning; the document did not, so a generated
+    // client could not see the header at all (Spec-017).
+    const { document, close } = await fetchDocument();
+
+    const rateLimited = document.paths['/v2/posts/{postId}/comments']?.get?.responses['429'] as {
+      headers?: Record<string, unknown>;
+    };
+
+    expect(rateLimited.headers).toMatchObject({
+      'retry-after': { schema: { type: 'string' } },
+    });
+    await close();
+  });
+
+  it('ties nextCursor to hasMore rather than leaving it to prose', async () => {
+    const { document, close } = await fetchDocument();
+
+    const pagination = document.components.schemas.Pagination as {
+      oneOf: { properties: Record<string, unknown> }[];
+    };
+
+    // The generator renders `const: x` as `enum: [x]`; both say the same thing.
+    expect(pagination.oneOf.map((branch) => branch.properties)).toEqual([
+      { hasMore: { enum: [true] }, nextCursor: { type: 'string' } },
+      { hasMore: { enum: [false] }, nextCursor: { type: 'null' } },
+    ]);
     await close();
   });
 

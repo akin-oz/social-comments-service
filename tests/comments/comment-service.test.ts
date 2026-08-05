@@ -715,7 +715,86 @@ describe('provider authorization context', () => {
 
 describe('service error contract', () => {
   it('uses the documented status codes', () => {
-    expect(new ServiceError('INVALID_CURSOR', 'bad cursor', 400).statusCode).toBe(400);
+    expect(
+      new ServiceError('INVALID_CURSOR', 'cursor_not_issued_by_service', 'bad cursor', 400)
+        .statusCode,
+    ).toBe(400);
+  });
+
+  it('gives each of the four idempotency situations its own reason', async () => {
+    // One code covered a client bug, a request in flight, and a terminal
+    // failure, distinguished only by English a copy-edit could change
+    // (Spec-017). The fourth situation got its own code as well.
+    const reasons: string[] = [];
+    const collect = async (run: () => Promise<unknown>) => {
+      const error = await run().then(
+        () => null,
+        (raised: unknown) => raised,
+      );
+      reasons.push((error as ServiceError).reason);
+    };
+
+    const harness = await (async () => {
+      const built = buildService();
+      const listed = await built.service.listComments(tenant, post.id, { limit: 25 });
+      return { ...built, parentId: listed.items[0]!.id };
+    })();
+    const { service, operations, comments, parentId } = harness;
+
+    await service.replyToComment(tenant, parentId, 'Thank you!', 'key-body');
+    await collect(() => service.replyToComment(tenant, parentId, 'Different', 'key-body'));
+
+    await operations.claim(tenant, {
+      id: crypto.randomUUID(),
+      commentId: parentId,
+      idempotencyKey: 'key-flight',
+      requestFingerprint: requestFingerprint(parentId, 'Thank you!'),
+      status: 'pending',
+      resultingCommentId: null,
+      failureCode: null,
+      leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      externalReplyId: null,
+      createdAt: new Date().toISOString(),
+      completedAt: null,
+    });
+    await collect(() => service.replyToComment(tenant, parentId, 'Thank you!', 'key-flight'));
+
+    const failing = buildService({
+      client: {
+        listComments: async () => ({
+          items: [externalComment('ig-comment-1', '2026-08-01T10:00:00.000Z')],
+          nextCursor: null,
+          hasMore: false,
+        }),
+        replyToComment: async () => {
+          throw new ProviderRateLimitError('Too many requests.', 30_000);
+        },
+      },
+    });
+    const failingParent = (await failing.service.listComments(tenant, post.id, { limit: 25 }))
+      .items[0]!.id;
+    await failing.service
+      .replyToComment(tenant, failingParent, 'Thank you!', 'key-failed')
+      .catch(() => undefined);
+    await collect(() =>
+      failing.service.replyToComment(tenant, failingParent, 'Thank you!', 'key-failed'),
+    );
+
+    comments.upsertMany = async () => {
+      throw new Error('database unavailable');
+    };
+    await service
+      .replyToComment(tenant, parentId, 'Thank you!', 'key-unknown')
+      .catch(() => undefined);
+    await collect(() => service.replyToComment(tenant, parentId, 'Thank you!', 'key-unknown'));
+
+    expect(reasons).toEqual([
+      'idempotency_key_body_mismatch',
+      'idempotency_key_in_flight',
+      'idempotency_key_failed',
+      'reply_outcome_unknown',
+    ]);
+    expect(new Set(reasons).size).toBe(4);
   });
 });
 

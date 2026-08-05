@@ -134,11 +134,14 @@ All errors use one stable envelope:
 {
   "error": {
     "code": "COMMENT_NOT_FOUND",
+    "reason": "comment_not_found",
     "message": "The requested comment was not found.",
     "requestId": "req_abc123"
   }
 }
 ```
+
+**Branch on `code` and `reason`. Never on `message`** — its wording is not part of the contract and a copy-edit may change it at any time. `reason` says which of several situations behind a code this is, and therefore what to do; reasons are globally unique, so a log or dashboard can group on reason alone.
 
 Expected mappings include:
 
@@ -158,11 +161,57 @@ A `429` response carries `Retry-After` whenever the provider supplied that guida
 
 A resource belonging to another tenant is `404`, not `403`: the caller is not told that something exists which they may not see.
 
-`IDEMPOTENCY_CONFLICT` covers three cases, distinguished by the message: the key was reused for a different request body, a reply for the key is still in flight, or the key already failed. A failed key is terminal, because the provider refused it; the client retries with a new key.
+### What each reason asks you to do
 
-`REPLY_OUTCOME_UNKNOWN` is deliberately a separate code (Spec-015). It means a reply may have been published and this service cannot establish whether it was — a timeout after send, a claim whose owning process died, or a publish that could not be recorded. The client action differs from every other `409`: **do not retry with a new key**, because retrying may publish a second reply under the customer's name. The service log names the provider's identifier for the reply that may exist, so an operator can check.
+| Code                     | Reason                          | Do this                                                              |
+| ------------------------ | ------------------------------- | -------------------------------------------------------------------- |
+| `UNAUTHENTICATED`        | `missing_account_context`       | Fix the caller: supply a valid `X-Account-Id`.                       |
+| `FORBIDDEN`              | `account_not_permitted`         | Fix the caller.                                                      |
+| `POST_NOT_FOUND`         | `post_not_found`                | Fix the request; the post is not visible in your scope.              |
+| `COMMENT_NOT_FOUND`      | `comment_not_found`             | List the post's comments first, then reply to an identifier from it. |
+| `IDEMPOTENCY_CONFLICT`   | `idempotency_key_body_mismatch` | Fix the caller. Reusing a key for a different body is a bug.         |
+| `IDEMPOTENCY_CONFLICT`   | `idempotency_key_in_flight`     | Retry **the same key** after a short delay.                          |
+| `IDEMPOTENCY_CONFLICT`   | `idempotency_key_failed`        | Retry with a **new key**. Nothing was published.                     |
+| `REPLY_OUTCOME_UNKNOWN`  | `reply_outcome_unknown`         | **Do not retry.** Escalate — a reply may already exist.              |
+| `REPLY_DEPTH_EXCEEDED`   | `reply_depth_exceeded`          | Fix the request: reply to the top-level comment instead.             |
+| `UNSUPPORTED_CAPABILITY` | `capability_unsupported`        | Do not retry; this platform cannot do this.                          |
+| `UNSUPPORTED_CAPABILITY` | `platform_not_configured`       | Escalate; the deployment has no adapter for this platform.           |
+| `PROVIDER_RATE_LIMITED`  | `provider_rate_limited`         | Retry unchanged after `Retry-After`.                                 |
+| `PROVIDER_ERROR`         | `provider_upstream_error`       | Retry a read; escalate a write, whose outcome may be unknown.        |
+| `PROVIDER_ERROR`         | `provider_cursor_rejected`      | Retry unchanged; the service restarts the provider stream itself.    |
+| `PROVIDER_UNAVAILABLE`   | `provider_unavailable`          | Retry a read with backoff; escalate a write.                         |
+| `INVALID_CURSOR`         | `cursor_not_issued_by_service`  | Restart pagination from no cursor.                                   |
+| `INVALID_REQUEST`        | `request_validation_failed`     | Fix the request.                                                     |
+| `INVALID_REQUEST`        | `idempotency_key_missing`       | Fix the caller: supply `Idempotency-Key`.                            |
+| `INTERNAL_ERROR`         | `reply_not_stored`              | Escalate; a reply may have been published.                           |
+| `INTERNAL_ERROR`         | `internal_error`                | Retry once, then escalate.                                           |
+
+`IDEMPOTENCY_CONFLICT` keeps one code across three situations on purpose: the code says what happened, the reason says what to do. Splitting it would break existing clients for no gain.
+
+`REPLY_OUTCOME_UNKNOWN` is deliberately a separate code (Spec-015). It means a reply may have been published and this service cannot establish whether it was — a timeout after send, a claim whose owning process died, or a publish that could not be recorded. Its action is the opposite of every other `409`. The service log names the provider's identifier for the reply that may exist, so an operator can check.
 
 `REPLY_DEPTH_EXCEEDED` means the parent named by the request is itself a reply. This service exposes one level of replies as a deliberate normalisation, not because every platform enforces one (ADR-0014).
+
+## Compatibility within `/v2`
+
+Every response schema sets `additionalProperties: false`, which describes what the service sends — not a promise that the shape will never grow. **A client must tolerate fields and enum members it does not recognise.** Validating a response strictly against a copy of the schema taken today will break on a change this policy explicitly permits.
+
+Permitted without a new version:
+
+- Adding an optional field to a response.
+- Adding a new member to an enum, including a new error `code` or `reason`.
+- Adding an optional request parameter or header.
+- Adding a new endpoint, or a new status to an existing endpoint's documented set.
+- Changing any `message` text, which is never part of the contract.
+
+Requires `/v3`:
+
+- Removing or renaming a field, an error `code`, or a `reason`.
+- Narrowing a type, or making an optional field required.
+- Changing the status code an existing situation produces.
+- Changing what an existing `code` or `reason` means.
+
+The risk this policy accepts is that a new enum member breaks a client validating strictly. That is exactly why the obligation is written down rather than assumed. A client that cannot tolerate unknown reasons should branch on `code` alone and treat an unrecognised `reason` as the code's default action.
 
 ## Pagination strategy
 

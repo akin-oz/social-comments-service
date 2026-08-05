@@ -19,6 +19,7 @@ export class InMemoryPlatformProviderRegistry implements PlatformProviderRegistr
     if (!provider) {
       throw new ServiceError(
         'UNSUPPORTED_CAPABILITY',
+        'platform_not_configured',
         `No provider adapter is configured for ${platform}.`,
         422,
       );
@@ -34,6 +35,7 @@ export function requireCapability(
   if (!provider.capabilities.has(capability)) {
     throw new ServiceError(
       'UNSUPPORTED_CAPABILITY',
+      'capability_unsupported',
       `Provider ${provider.platform} does not support ${capability}.`,
       422,
     );

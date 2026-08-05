@@ -287,7 +287,12 @@ export class InMemoryReplyOperationRepository implements ReplyOperationRepositor
   ): ReplyOperation {
     const operation = this.operations.get(context.accountId, operationId);
     if (!operation) {
-      throw new ServiceError('INTERNAL_ERROR', 'Reply operation was not found.', 500);
+      throw new ServiceError(
+        'INTERNAL_ERROR',
+        'internal_error',
+        'Reply operation was not found.',
+        500,
+      );
     }
     const updated: ReplyOperation = { ...operation, ...changes };
     this.operations.set(context.accountId, operationId, updated);

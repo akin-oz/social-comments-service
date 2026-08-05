@@ -7,6 +7,8 @@
  * reaching a client even if one is added to the domain model later.
  */
 
+import { serviceErrorReasons } from '../shared/errors.js';
+
 export const platformValues = ['facebook', 'instagram', 'linkedin', 'x', 'youtube'] as const;
 
 export const errorCodeValues = [
@@ -77,15 +79,47 @@ export const paginationSchema = {
   $id: 'Pagination',
   type: 'object',
   title: 'Pagination',
+  description:
+    'A cursor is present exactly when there is more to read. Keep going while hasMore is true; a page may hold fewer items than the requested limit, and may hold none, without meaning the run is over.',
   required: ['nextCursor', 'hasMore'],
   additionalProperties: false,
   properties: {
     nextCursor: {
       type: ['string', 'null'],
-      description: 'Opaque cursor for the next page. Clients must not decode or construct it.',
+      description:
+        'Opaque cursor for the next page, non-null exactly when hasMore is true. Clients must not decode or construct it.',
     },
-    hasMore: { type: 'boolean' },
+    hasMore: {
+      type: 'boolean',
+      description: 'Whether more comments exist, not whether this page happened to fill.',
+    },
   },
+  // Stated in the schema, not only in prose, so a generated client can see the
+  // relationship rather than infer it (Spec-017). `oneOf` rather than
+  // `allOf`/`if`/`then` because the response serializer resolves a `oneOf` by
+  // validating the value against each branch, and cannot merge conditionals.
+  oneOf: [
+    {
+      type: 'object',
+      title: 'More to read',
+      required: ['nextCursor', 'hasMore'],
+      additionalProperties: false,
+      properties: {
+        nextCursor: { type: 'string' },
+        hasMore: { const: true },
+      },
+    },
+    {
+      type: 'object',
+      title: 'End of the run',
+      required: ['nextCursor', 'hasMore'],
+      additionalProperties: false,
+      properties: {
+        nextCursor: { type: 'null' },
+        hasMore: { const: false },
+      },
+    },
+  ],
 } as const;
 
 export const snapshotSchema = {
@@ -109,15 +143,23 @@ export const errorSchema = {
   $id: 'Error',
   type: 'object',
   title: 'Error',
+  description:
+    'Branch on code and reason. The message is for humans and its wording is not part of the contract.',
   required: ['error'],
   additionalProperties: false,
   properties: {
     error: {
       type: 'object',
-      required: ['code', 'message', 'requestId'],
+      required: ['code', 'reason', 'message', 'requestId'],
       additionalProperties: false,
       properties: {
         code: { type: 'string', enum: errorCodeValues },
+        reason: {
+          type: 'string',
+          enum: serviceErrorReasons,
+          description:
+            'Which situation behind the code this is, and therefore what to do next. Reasons are globally unique. A client must tolerate a reason it does not know: new members may be added within /v2.',
+        },
         message: { type: 'string' },
         requestId: {
           type: 'string',
@@ -126,6 +168,25 @@ export const errorSchema = {
       },
     },
   },
+  examples: [
+    {
+      error: {
+        code: 'IDEMPOTENCY_CONFLICT',
+        reason: 'idempotency_key_failed',
+        message: 'This idempotency key already failed; retry with a new key.',
+        requestId: 'req_abc123',
+      },
+    },
+    {
+      error: {
+        code: 'REPLY_OUTCOME_UNKNOWN',
+        reason: 'reply_outcome_unknown',
+        message:
+          'The outcome of this reply could not be established; a reply may have been published. Do not retry with a new key.',
+        requestId: 'req_abc124',
+      },
+    },
+  ],
 } as const;
 
 export const sharedSchemas = [commentSchema, paginationSchema, snapshotSchema, errorSchema];
@@ -143,12 +204,28 @@ const errorDescriptions: Readonly<Record<number, string>> = {
   503: 'The provider is temporarily unavailable.',
 };
 
+/**
+ * `Retry-After` was described in prose and absent from the document, so a
+ * generated client could not see it. Declared here it reaches both.
+ */
+const retryAfterHeader = {
+  'retry-after': {
+    type: 'string',
+    description:
+      "Seconds to wait before retrying, carrying the provider's own guidance when it supplied any.",
+  },
+} as const;
+
 /** Builds the response map for the documented failure statuses of an operation. */
 export function errorResponses(statuses: readonly number[]) {
   return Object.fromEntries(
     statuses.map((status) => [
       status,
-      { description: errorDescriptions[status] ?? 'Request failed.', $ref: 'Error#' },
+      {
+        description: errorDescriptions[status] ?? 'Request failed.',
+        $ref: 'Error#',
+        ...(status === 429 ? { headers: retryAfterHeader } : {}),
+      },
     ]),
   );
 }

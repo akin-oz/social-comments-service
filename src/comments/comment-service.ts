@@ -298,6 +298,7 @@ export class CommentService {
       });
       throw new ServiceError(
         'IDEMPOTENCY_CONFLICT',
+        'idempotency_key_in_flight',
         'A reply for this idempotency key is already in progress.',
         409,
       );
@@ -355,7 +356,12 @@ export class CommentService {
       await this.operations.recordPublished(context, claim.operation.id, reply.externalId);
       [stored] = await this.comments.upsertMany(context, [reply]);
       if (!stored) {
-        throw new ServiceError('INTERNAL_ERROR', 'The published reply could not be stored.', 500);
+        throw new ServiceError(
+          'INTERNAL_ERROR',
+          'reply_not_stored',
+          'The published reply could not be stored.',
+          500,
+        );
       }
     } catch (error) {
       // Nothing was stored. The outcome is not failed — a reply was published —
@@ -497,6 +503,7 @@ export class CommentService {
     if (operation.requestFingerprint !== fingerprint) {
       throw new ServiceError(
         'IDEMPOTENCY_CONFLICT',
+        'idempotency_key_body_mismatch',
         'The idempotency key was already used for a different request.',
         409,
       );
@@ -508,6 +515,7 @@ export class CommentService {
     if (operation.status === 'failed') {
       throw new ServiceError(
         'IDEMPOTENCY_CONFLICT',
+        'idempotency_key_failed',
         'This idempotency key already failed; retry with a new key.',
         409,
       );

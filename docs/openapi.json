@@ -92,6 +92,7 @@
       "Pagination": {
         "type": "object",
         "title": "Pagination",
+        "description": "A cursor is present exactly when there is more to read. Keep going while hasMore is true; a page may hold fewer items than the requested limit, and may hold none, without meaning the run is over.",
         "required": [
           "nextCursor",
           "hasMore"
@@ -100,15 +101,56 @@
         "properties": {
           "nextCursor": {
             "type": [
-              "null",
-              "string"
+              "string",
+              "null"
             ],
-            "description": "Opaque cursor for the next page. Clients must not decode or construct it."
+            "description": "Opaque cursor for the next page, non-null exactly when hasMore is true. Clients must not decode or construct it."
           },
           "hasMore": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Whether more comments exist, not whether this page happened to fill."
           }
-        }
+        },
+        "oneOf": [
+          {
+            "type": "object",
+            "title": "More to read",
+            "required": [
+              "nextCursor",
+              "hasMore"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "nextCursor": {
+                "type": "string"
+              },
+              "hasMore": {
+                "enum": [
+                  true
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "End of the run",
+            "required": [
+              "nextCursor",
+              "hasMore"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "nextCursor": {
+                "type": "null"
+              },
+              "hasMore": {
+                "enum": [
+                  false
+                ]
+              }
+            }
+          }
+        ]
       },
       "Snapshot": {
         "type": "object",
@@ -132,6 +174,7 @@
       "Error": {
         "type": "object",
         "title": "Error",
+        "description": "Branch on code and reason. The message is for humans and its wording is not part of the contract.",
         "required": [
           "error"
         ],
@@ -141,6 +184,7 @@
             "type": "object",
             "required": [
               "code",
+              "reason",
               "message",
               "requestId"
             ],
@@ -165,6 +209,32 @@
                   "INTERNAL_ERROR"
                 ]
               },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "missing_account_context",
+                  "account_not_permitted",
+                  "post_not_found",
+                  "comment_not_found",
+                  "idempotency_key_body_mismatch",
+                  "idempotency_key_in_flight",
+                  "idempotency_key_failed",
+                  "reply_outcome_unknown",
+                  "reply_depth_exceeded",
+                  "capability_unsupported",
+                  "platform_not_configured",
+                  "provider_rate_limited",
+                  "provider_upstream_error",
+                  "provider_cursor_rejected",
+                  "provider_unavailable",
+                  "cursor_not_issued_by_service",
+                  "request_validation_failed",
+                  "idempotency_key_missing",
+                  "reply_not_stored",
+                  "internal_error"
+                ],
+                "description": "Which situation behind the code this is, and therefore what to do next. Reasons are globally unique. A client must tolerate a reason it does not know: new members may be added within /v2."
+              },
               "message": {
                 "type": "string"
               },
@@ -173,6 +243,14 @@
                 "description": "Correlates the response with the service log record."
               }
             }
+          }
+        },
+        "example": {
+          "error": {
+            "code": "IDEMPOTENCY_CONFLICT",
+            "reason": "idempotency_key_failed",
+            "message": "This idempotency key already failed; retry with a new key.",
+            "requestId": "req_abc123"
           }
         }
       }
@@ -294,6 +372,14 @@
           },
           "429": {
             "description": "A provider or service rate limit was reached.",
+            "headers": {
+              "retry-after": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Seconds to wait before retrying, carrying the provider's own guidance when it supplied any."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -457,6 +543,14 @@
           },
           "429": {
             "description": "A provider or service rate limit was reached.",
+            "headers": {
+              "retry-after": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Seconds to wait before retrying, carrying the provider's own guidance when it supplied any."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {

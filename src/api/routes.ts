@@ -1,7 +1,12 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { DomainValidationError } from '../shared/validation.js';
-import { ProviderRateLimitError, ServiceError } from '../shared/errors.js';
+import {
+  ProviderRateLimitError,
+  ServiceError,
+  type ServiceErrorCode,
+  type ServiceErrorReason,
+} from '../shared/errors.js';
 import { errorResponses, sharedSchemas } from './schemas.js';
 import { isUuid } from '../shared/identifiers.js';
 import type { CommentService } from '../comments/comment-service.js';
@@ -76,7 +81,14 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
       );
       return reply
         .code(401)
-        .send(errorResponse('UNAUTHENTICATED', 'Authentication is required.', request.id));
+        .send(
+          errorResponse(
+            'UNAUTHENTICATED',
+            'missing_account_context',
+            'Authentication is required.',
+            request.id,
+          ),
+        );
     }
     (request as RequestWithContext).requestContext = { accountId, requestId: request.id };
   });
@@ -191,7 +203,14 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
       if (typeof idempotencyKey !== 'string' || idempotencyKey.trim() === '') {
         return reply
           .code(400)
-          .send(errorResponse('INVALID_REQUEST', 'Idempotency-Key is required.', request.id));
+          .send(
+            errorResponse(
+              'INVALID_REQUEST',
+              'idempotency_key_missing',
+              'Idempotency-Key is required.',
+              request.id,
+            ),
+          );
       }
       const result = await service.replyToComment(
         (request as RequestWithContext).requestContext,
@@ -208,18 +227,29 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
       logRejection(request, 'INVALID_REQUEST', 400);
       return reply
         .code(400)
-        .send(errorResponse('INVALID_REQUEST', 'The request is invalid.', request.id));
+        .send(
+          errorResponse(
+            'INVALID_REQUEST',
+            'request_validation_failed',
+            'The request is invalid.',
+            request.id,
+          ),
+        );
     }
     if (error instanceof DomainValidationError) {
       logRejection(request, 'INVALID_REQUEST', 400);
-      return reply.code(400).send(errorResponse('INVALID_REQUEST', error.message, request.id));
+      return reply
+        .code(400)
+        .send(
+          errorResponse('INVALID_REQUEST', 'request_validation_failed', error.message, request.id),
+        );
     }
     if (error instanceof ServiceError) {
       applyRetryAfter(reply, error);
       logRejection(request, error.code, error.statusCode);
       return reply
         .code(error.statusCode)
-        .send(errorResponse(error.code, error.message, request.id));
+        .send(errorResponse(error.code, error.reason, error.message, request.id));
     }
     // A driver error carries detail, internalQuery, and constraint values that
     // may quote row content. Only the shape is logged (ADR-0011).
@@ -235,7 +265,14 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
     );
     return reply
       .code(500)
-      .send(errorResponse('INTERNAL_ERROR', 'The request could not be completed.', request.id));
+      .send(
+        errorResponse(
+          'INTERNAL_ERROR',
+          'internal_error',
+          'The request could not be completed.',
+          request.id,
+        ),
+      );
   });
 }
 
@@ -256,6 +293,11 @@ function applyRetryAfter(reply: FastifyReply, error: ServiceError): void {
   }
 }
 
-function errorResponse(code: string, message: string, requestId: string) {
-  return { error: { code, message, requestId } };
+function errorResponse(
+  code: ServiceErrorCode,
+  reason: ServiceErrorReason,
+  message: string,
+  requestId: string,
+) {
+  return { error: { code, reason, message, requestId } };
 }

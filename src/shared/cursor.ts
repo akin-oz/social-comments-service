@@ -64,5 +64,10 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function invalidCursor(): ServiceError {
-  return new ServiceError('INVALID_CURSOR', 'The pagination cursor is invalid.', 400);
+  return new ServiceError(
+    'INVALID_CURSOR',
+    'cursor_not_issued_by_service',
+    'The pagination cursor is invalid.',
+    400,
+  );
 }

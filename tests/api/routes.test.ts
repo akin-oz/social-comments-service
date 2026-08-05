@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
-import { createDemoApplication, demoAccountId, demoPost } from '../../src/index.js';
+import {
+  createApplication,
+  createDemoApplication,
+  demoAccountId,
+  demoPost,
+} from '../../src/index.js';
+import { AdaptiveProviderAdapter } from '../../src/platforms/adaptive-provider.js';
+import {
+  InMemoryCommentRepository,
+  InMemoryPostRepository,
+} from '../../src/repositories/in-memory.js';
+import { ProviderRateLimitError } from '../../src/shared/errors.js';
+import { providerPolicies, providerRetryPolicy } from '../../src/shared/observability.js';
 
 const auth = { 'x-account-id': demoAccountId };
 
@@ -112,6 +124,84 @@ describe('comment REST API', () => {
     });
 
     expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('carries a machine-readable reason on every error, not only a message', async () => {
+    // Correct client behaviour used to depend on matching English prose, which
+    // a copy-edit silently breaks (Spec-017).
+    const app = createDemoApplication({ logger: false });
+
+    const unauthenticated = await app.inject({
+      method: 'GET',
+      url: `/v2/posts/${demoPost.id}/comments`,
+    });
+    const badCursor = await app.inject({
+      method: 'GET',
+      url: `/v2/posts/${demoPost.id}/comments?cursor=not-a-cursor`,
+      headers: auth,
+    });
+
+    expect(unauthenticated.json()).toMatchObject({
+      error: { code: 'UNAUTHENTICATED', reason: 'missing_account_context' },
+    });
+    expect(badCursor.json()).toMatchObject({
+      error: { code: 'INVALID_CURSOR', reason: 'cursor_not_issued_by_service' },
+    });
+    await app.close();
+  });
+
+  it('sends Retry-After when the provider supplied that guidance', async () => {
+    // Described in prose since the first version and never asserted on a
+    // response, so nothing would have caught it disappearing.
+    const app = createApplication({
+      logger: false,
+      posts: new InMemoryPostRepository([demoPost]),
+      comments: new InMemoryCommentRepository([], demoAccountId),
+      providers: new Map([
+        [
+          'instagram' as const,
+          new AdaptiveProviderAdapter(
+            'instagram',
+            {
+              listComments: async () => {
+                throw new ProviderRateLimitError('Too many requests.', 45_000);
+              },
+              replyToComment: async () => {
+                throw new Error('not used');
+              },
+            },
+            new Set(['list_comments']),
+            providerPolicies({ ...providerRetryPolicy, maxAttempts: 1 }),
+          ),
+        ],
+      ]),
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/v2/posts/${demoPost.id}/comments`,
+      headers: auth,
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.headers['retry-after']).toBe('45');
+    expect(response.json()).toMatchObject({
+      error: { code: 'PROVIDER_RATE_LIMITED', reason: 'provider_rate_limited' },
+    });
+    await app.close();
+  });
+
+  it('returns a cursor exactly when there is more to read', async () => {
+    const app = createDemoApplication({ logger: false });
+
+    const partial = await listComments(app, 'limit=2');
+    const complete = await listComments(app, 'limit=50');
+
+    expect(partial.body.pagination.hasMore).toBe(true);
+    expect(partial.body.pagination.nextCursor).toEqual(expect.any(String));
+    expect(complete.body.pagination.hasMore).toBe(false);
+    expect(complete.body.pagination.nextCursor).toBeNull();
     await app.close();
   });
 
