@@ -162,6 +162,13 @@ export class InMemoryCommentRepository implements CommentRepository {
   }
 }
 
+/** What a post that has never been read looks like. */
+const emptySnapshot: PostSnapshotState = {
+  providerCursor: null,
+  exhausted: false,
+  completedAt: null,
+};
+
 export class InMemoryPostRepository implements PostRepository {
   private readonly posts = new Map<string, PublishedPost>();
   private readonly snapshots = new TenantScoped<PostSnapshotState>();
@@ -178,20 +185,24 @@ export class InMemoryPostRepository implements PostRepository {
     if (post?.accountId !== context.accountId) return null;
     // An unseen post has read nothing of its provider stream, so it is not
     // exhausted and the first read hydrates.
-    const snapshot = this.snapshots.get(context.accountId, postId) ?? {
-      providerCursor: null,
-      exhausted: false,
-      completedAt: null,
-    };
-    return { post, snapshot };
+    return { post, snapshot: this.snapshots.get(context.accountId, postId) ?? emptySnapshot };
   }
 
   public async saveSnapshotState(
     context: TenantContext,
     postId: string,
     state: PostSnapshotState,
-  ): Promise<void> {
+    expected: PostSnapshotState,
+  ): Promise<boolean> {
+    const current = this.snapshots.get(context.accountId, postId) ?? emptySnapshot;
+    if (
+      current.providerCursor !== expected.providerCursor ||
+      current.exhausted !== expected.exhausted
+    ) {
+      return false;
+    }
     this.snapshots.set(context.accountId, postId, state);
+    return true;
   }
 }
 

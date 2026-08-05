@@ -14,6 +14,17 @@ Only one migration runner executes database migrations per release. API replicas
 - Rate limits map to `PROVIDER_RATE_LIMITED`; operators should honor provider reset information and avoid retry storms.
 - Provider outages map to `PROVIDER_UNAVAILABLE` or `PROVIDER_ERROR` and should be investigated using request ID and provider metrics.
 
+### Provider load under concurrent reads
+
+Hydration of a post is **single-flight per replica** (Spec-019). Callers arriving while a post is already being hydrated wait for that work and read its result rather than starting their own, so a burst of K readers on a cold post costs one read instead of K. This matters because completing a snapshot walks the provider stream: without deduplication the first burst on a popular post is exactly when provider load is highest and a rate limit is most likely.
+
+Two consequences an operator should know:
+
+- **Deduplication is per replica.** N replicas can still issue N hydrations. Cutting that further needs cross-replica coordination, which ADR-0009 defers; the factor that matters in practice is concurrent readers landing on one process.
+- **A joiner waits at most ten seconds.** Past that it answers from the snapshot it has and reports `hasMore`, rather than holding a request until its own thirty-second timeout having helped nobody.
+
+Snapshot advances are compare-and-set: a hydration only moves the stored continuation from the state it read. A losing writer keeps the newer state and stops rather than retrying, which would loop under sustained concurrency. Watch `comments.list.hydration_joined` against `comments.list.hydration_started` to see how much duplicate provider traffic is being avoided, and `comments.snapshot.conflict` for how often two hydrations are racing.
+
 ### Reply operation states
 
 A reply operation is claimed on insert and holds that claim under a **lease of two minutes** — comfortably longer than any request that can still be alive, since the HTTP request timeout is thirty seconds. The lease exists because a claim held forever means a process that dies mid-request poisons its idempotency key permanently (Spec-015).
@@ -48,6 +59,8 @@ The events worth knowing:
 | --------------------------------- | ----- | ------------------------------------------------------------------ |
 | `comments.list.served_from_cache` | info  | Answered from the local snapshot; no provider traffic.             |
 | `comments.list.hydrated`          | info  | The snapshot could not answer; a provider page was fetched.        |
+| `comments.list.hydration_joined`  | info  | Waited for a hydration already running; carries `waitedMs`.        |
+| `comments.snapshot.conflict`      | info  | Another hydration advanced the snapshot first; this one stopped.   |
 | `provider.list.completed`         | info  | A provider read finished; carries `fetched` and `durationMs`.      |
 | `comments.reply.published`        | info  | A reply reached the provider and was stored.                       |
 | `comments.reply.replayed`         | info  | An idempotent retry returned the stored reply.                     |

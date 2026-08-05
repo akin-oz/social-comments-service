@@ -166,14 +166,32 @@ export class PostgresPostRepository implements PostRepository {
     context: TenantContext,
     postId: string,
     state: PostSnapshotState,
-  ): Promise<void> {
-    await this.db.withTenant(context.accountId, async (tx) => {
-      await tx.query(
+    expected: PostSnapshotState,
+  ): Promise<boolean> {
+    return this.db.withTenant(context.accountId, async (tx) => {
+      // `is not distinct from` rather than `=`, because the continuation is
+      // null both before the first page and after the last, and `= null` never
+      // matches.
+      // `returning` rather than a row count, so the port stays a rows-only
+      // contract and the caller still learns whether the compare matched.
+      const result = await tx.query<{ id: string }>(
         `update posts set provider_cursor = $1, provider_exhausted = $2,
            provider_completed_at = $3
-         where id = $4 and account_id = $5`,
-        [state.providerCursor, state.exhausted, state.completedAt, postId, context.accountId],
+         where id = $4 and account_id = $5
+           and provider_cursor is not distinct from $6
+           and provider_exhausted = $7
+         returning id`,
+        [
+          state.providerCursor,
+          state.exhausted,
+          state.completedAt,
+          postId,
+          context.accountId,
+          expected.providerCursor,
+          expected.exhausted,
+        ],
       );
+      return result.rows.length > 0;
     });
   }
 }

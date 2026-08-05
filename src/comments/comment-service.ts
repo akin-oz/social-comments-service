@@ -65,6 +65,17 @@ const DEFAULT_SNAPSHOT_LIFETIME_SECONDS = 300;
 const REPLY_LEASE_MS = 120_000;
 
 /**
+ * How long a request will wait for a hydration someone else started
+ * (Spec-019).
+ *
+ * Bounded by what the joiner can afford rather than by what the work it joined
+ * might take: the HTTP request timeout is thirty seconds, so a joiner that
+ * waited for a full twenty-call run would time out having helped nobody. Past
+ * this it answers from the snapshot it has, reporting `hasMore`.
+ */
+const HYDRATION_JOIN_WAIT_MS = 10_000;
+
+/**
  * Whether a provider failure proves the reply was never published.
  *
  * A rate limit is a refusal: the provider declined to process the request, so
@@ -103,6 +114,22 @@ const emptySnapshotState: PostSnapshotState = {
 };
 
 export class CommentService {
+  /**
+   * Hydrations running right now, keyed by tenant and post (Spec-019).
+   *
+   * Process-local mutable state, which this service otherwise has none of. It
+   * belongs to the instance rather than the module so two compositions — two
+   * tests, most often — cannot see each other's in-flight work. Deduplication
+   * is therefore per replica: N replicas can still issue N hydrations, which is
+   * judged good enough until there is evidence otherwise, because the factor
+   * that matters is concurrent readers of one popular post and they mostly land
+   * on the same process at once.
+   */
+  private readonly inFlight = new Map<
+    string,
+    Promise<{ state: PostSnapshotState; hydrations: number }>
+  >();
+
   public constructor(
     private readonly comments: CommentRepository,
     private readonly posts: PostRepository,
@@ -141,6 +168,7 @@ export class CommentService {
       let state = this.stale(snapshot) ? emptySnapshotState : snapshot;
       let page = await this.comments.listByPost(context, query);
       let hydrations = 0;
+      let joined = false;
 
       // A pagination run must read a snapshot that does not move underneath it.
       // Provider order is not the service's order — Meta, X, and YouTube return
@@ -149,15 +177,34 @@ export class CommentService {
       // therefore completes the snapshot first; continuing one only tops it up
       // when the page is short (Spec-014).
       const startingRun = cursor.after === null;
-      while (
-        !state.exhausted &&
-        hydrations < MAX_HYDRATIONS_PER_REQUEST &&
-        (startingRun || page.items.length < request.limit)
-      ) {
-        state = await this.hydrate(context, post, state);
-        await this.posts.saveSnapshotState(context, postId, state);
+      if (this.needsHydration(state, startingRun, page.items.length, request.limit)) {
+        // K readers arriving together on a cold post used to run K copies of
+        // the whole loop, which against a rate-limited provider is the shape of
+        // an outage: the first burst on a popular post is exactly when load is
+        // highest (Spec-019).
+        const inFlight = this.inFlight.get(this.postKey(context, postId));
+        if (inFlight) {
+          joined = true;
+          state = await this.joinHydration(context, post, inFlight, state);
+        } else {
+          const run = this.runHydration(context, post, state, snapshot, {
+            startingRun,
+            limit: request.limit,
+            query,
+          });
+          this.inFlight.set(this.postKey(context, postId), run);
+          try {
+            const outcome = await run;
+            state = outcome.state;
+            hydrations = outcome.hydrations;
+          } finally {
+            // Cleared whatever happened, so a failed hydration does not leave
+            // the post marked in flight forever.
+            this.inFlight.delete(this.postKey(context, postId));
+          }
+          this.metrics.increment('comments.list.hydration_started', { platform: post.platform });
+        }
         page = await this.comments.listByPost(context, query);
-        hydrations += 1;
       }
 
       const last = page.items[page.items.length - 1];
@@ -179,7 +226,7 @@ export class CommentService {
       this.metrics.increment('comments.list.success', { platform: post.platform });
       this.metrics.observe('comments.list.duration_ms', durationMs, { platform: post.platform });
       this.logger.info(
-        hydrations > 0 ? 'comments.list.hydrated' : 'comments.list.served_from_cache',
+        hydrations > 0 || joined ? 'comments.list.hydrated' : 'comments.list.served_from_cache',
         {
           ...this.trace(context),
           postId,
@@ -187,6 +234,7 @@ export class CommentService {
           returned: page.items.length,
           hasMore,
           hydrations,
+          joined,
           durationMs,
         },
       );
@@ -413,6 +461,107 @@ export class CommentService {
       durationMs: Date.now() - startedAt,
     });
     return stored;
+  }
+
+  private postKey(context: RequestContext, postId: string): string {
+    return `${context.accountId} ${postId}`;
+  }
+
+  /** Whether this request would read the provider if nothing else were. */
+  private needsHydration(
+    state: PostSnapshotState,
+    startingRun: boolean,
+    returned: number,
+    limit: number,
+  ): boolean {
+    return !state.exhausted && (startingRun || returned < limit);
+  }
+
+  /**
+   * Completes the snapshot, bounded, and reports how far it got.
+   *
+   * `expected` is what the database held when this request read it, which is
+   * not always the state hydration starts from: a stale snapshot restarts the
+   * stream while the stored row still says exhausted. The compare-and-set has
+   * to be against what is stored, not against where this run began.
+   */
+  private async runHydration(
+    context: RequestContext,
+    post: PublishedPost,
+    from: PostSnapshotState,
+    stored: PostSnapshotState,
+    request: { startingRun: boolean; limit: number; query: ListCommentsQuery },
+  ): Promise<{ state: PostSnapshotState; hydrations: number }> {
+    let state = from;
+    let expected = stored;
+    let hydrations = 0;
+    let returned = (await this.comments.listByPost(context, request.query)).items.length;
+
+    while (
+      this.needsHydration(state, request.startingRun, returned, request.limit) &&
+      hydrations < MAX_HYDRATIONS_PER_REQUEST
+    ) {
+      const next = await this.hydrate(context, post, state);
+      const won = await this.posts.saveSnapshotState(context, post.id, next, expected);
+      hydrations += 1;
+      if (!won) {
+        // Another hydration advanced the snapshot first. Keeping the newer
+        // state and stopping is deliberate: retrying against a moving target
+        // loops under sustained concurrency, and the rows this run fetched are
+        // already stored either way.
+        this.metrics.increment('comments.list.snapshot_conflict', { platform: post.platform });
+        this.logger.info('comments.snapshot.conflict', {
+          ...this.trace(context),
+          postId: post.id,
+          platform: post.platform,
+        });
+        const current = await this.posts.findPublishedById(context, post.id);
+        return { state: current?.snapshot ?? next, hydrations };
+      }
+      state = next;
+      expected = next;
+      returned = (await this.comments.listByPost(context, request.query)).items.length;
+    }
+
+    return { state, hydrations };
+  }
+
+  /**
+   * Waits for a hydration already running for this post, but not longer than a
+   * caller can afford.
+   *
+   * Past the bound the joiner answers from the snapshot it has. That is a
+   * knowingly incomplete page, reported as such by `hasMore` — which is a
+   * better outcome than holding a request until its own timeout, having helped
+   * nobody.
+   */
+  private async joinHydration(
+    context: RequestContext,
+    post: PublishedPost,
+    inFlight: Promise<{ state: PostSnapshotState; hydrations: number }>,
+    fallback: PostSnapshotState,
+  ): Promise<PostSnapshotState> {
+    const waitedFrom = Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const bounded = new Promise<PostSnapshotState>((resolve) => {
+      timer = setTimeout(() => resolve(fallback), HYDRATION_JOIN_WAIT_MS);
+    });
+    try {
+      const state = await Promise.race([inFlight.then((outcome) => outcome.state), bounded]);
+      this.metrics.increment('comments.list.hydration_joined', { platform: post.platform });
+      this.metrics.observe('comments.list.hydration_wait_ms', Date.now() - waitedFrom, {
+        platform: post.platform,
+      });
+      this.logger.info('comments.list.hydration_joined', {
+        ...this.trace(context),
+        postId: post.id,
+        platform: post.platform,
+        waitedMs: Date.now() - waitedFrom,
+      });
+      return state;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   /**

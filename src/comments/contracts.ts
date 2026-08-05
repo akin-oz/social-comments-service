@@ -83,11 +83,20 @@ export interface PublishedPostRecord {
 
 export interface PostRepository {
   findPublishedById(context: TenantContext, postId: string): Promise<PublishedPostRecord | null>;
+  /**
+   * Advances the stored continuation, but only from the state the caller read.
+   *
+   * Returns false when someone else moved it first. Without the compare, two
+   * concurrent hydrations write continuations in either order and the later
+   * writer wins regardless of which is further along, so the snapshot can move
+   * backwards (Spec-019).
+   */
   saveSnapshotState(
     context: TenantContext,
     postId: string,
     state: PostSnapshotState,
-  ): Promise<void>;
+    expected: PostSnapshotState,
+  ): Promise<boolean>;
 }
 
 /**

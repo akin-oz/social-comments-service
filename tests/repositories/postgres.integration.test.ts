@@ -153,33 +153,59 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
   });
 
   it('round-trips the snapshot state a read depends on', async () => {
-    await posts.saveSnapshotState(contextA, tenantA.postId, {
-      providerCursor: 'provider-page-2',
-      exhausted: false,
-      completedAt: null,
-    });
+    const start = (await posts.findPublishedById(contextA, tenantA.postId))!.snapshot;
+    const page2 = { providerCursor: 'provider-page-2', exhausted: false, completedAt: null };
+
+    await expect(posts.saveSnapshotState(contextA, tenantA.postId, page2, start)).resolves.toBe(
+      true,
+    );
     await expect(posts.findPublishedById(contextA, tenantA.postId)).resolves.toMatchObject({
       snapshot: { providerCursor: 'provider-page-2', exhausted: false },
     });
 
-    await posts.saveSnapshotState(contextA, tenantA.postId, {
+    const done = {
       providerCursor: null,
       exhausted: true,
       completedAt: '2026-08-01T10:00:00.000Z',
-    });
+    };
+    await expect(posts.saveSnapshotState(contextA, tenantA.postId, done, page2)).resolves.toBe(
+      true,
+    );
     await expect(posts.findPublishedById(contextA, tenantA.postId)).resolves.toMatchObject({
       snapshot: { providerCursor: null, exhausted: true },
+    });
+  });
+
+  it('refuses to move a snapshot that changed underneath the writer', async () => {
+    // Two concurrent hydrations used to write continuations in either order,
+    // and the later writer won regardless of which was further along, so the
+    // snapshot could move backwards (Spec-019).
+    const start = (await posts.findPublishedById(contextA, tenantA.postId))!.snapshot;
+    const ahead = { providerCursor: 'page-9', exhausted: false, completedAt: null };
+    const behind = { providerCursor: 'page-2', exhausted: false, completedAt: null };
+
+    await expect(posts.saveSnapshotState(contextA, tenantA.postId, ahead, start)).resolves.toBe(
+      true,
+    );
+    // A writer still holding the state it read before `ahead` landed.
+    await expect(posts.saveSnapshotState(contextA, tenantA.postId, behind, start)).resolves.toBe(
+      false,
+    );
+
+    await expect(posts.findPublishedById(contextA, tenantA.postId)).resolves.toMatchObject({
+      snapshot: { providerCursor: 'page-9' },
     });
   });
 
   it('cannot advance another tenant snapshot state', async () => {
     const before = await posts.findPublishedById(contextB, tenantB.postId);
     // Row-level security makes this update match nothing rather than fail loudly.
-    await posts.saveSnapshotState(contextA, tenantB.postId, {
-      providerCursor: 'forged',
-      exhausted: true,
-      completedAt: null,
-    });
+    await posts.saveSnapshotState(
+      contextA,
+      tenantB.postId,
+      { providerCursor: 'forged', exhausted: true, completedAt: null },
+      before!.snapshot,
+    );
     const after = await posts.findPublishedById(contextB, tenantB.postId);
 
     expect(after?.snapshot).toEqual(before?.snapshot);

@@ -620,6 +620,229 @@ describe('replying to a comment', () => {
   });
 });
 
+describe('provider load under concurrency', () => {
+  /** A client that takes a tick to answer, so concurrent callers overlap. */
+  function slowClient(inner: ProviderClient): ProviderClient {
+    return {
+      listComments: async (query) => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return inner.listComments(query);
+      },
+      replyToComment: async (command) => inner.replyToComment(command),
+    };
+  }
+
+  function harness(maxPageSize = 1) {
+    const fixture = new FixtureProviderClient({
+      commentsByPost: new Map([
+        [
+          post.externalPostId,
+          [
+            externalComment('ig-comment-1', '2026-08-01T10:00:00.000Z'),
+            externalComment('ig-comment-2', '2026-08-01T11:00:00.000Z'),
+            externalComment('ig-comment-3', '2026-08-01T12:00:00.000Z'),
+          ],
+        ],
+      ]),
+      maxPageSize,
+      now: () => '2026-08-02T12:00:00.000Z',
+    });
+    const client = new CountingClient(slowClient(fixture));
+    const logger = new RecordingLogger();
+    const service = new CommentService(
+      new InMemoryCommentRepository([], tenant.accountId),
+      new InMemoryPostRepository([post]),
+      new InMemoryReplyOperationRepository(),
+      new InMemoryPlatformProviderRegistry(
+        new Map([
+          [
+            post.platform,
+            new AdaptiveProviderAdapter(
+              post.platform,
+              client,
+              new Set(['list_comments', 'reply_to_comment']),
+              providerPolicies(immediatePolicy),
+            ),
+          ],
+        ]),
+      ),
+      noopMetrics,
+      logger,
+    );
+    return { service, client, logger };
+  }
+
+  it('costs one read when many callers arrive on a cold post together', async () => {
+    // Spec-014 made this worse on purpose: a first read now walks the whole
+    // provider stream. Without deduplication five concurrent readers pay for
+    // five walks, which against a rate-limited API is the shape of an outage.
+    const { service, client } = harness();
+
+    const pages = await Promise.all(
+      Array.from({ length: 5 }, () => service.listComments(tenant, post.id, { limit: 25 })),
+    );
+    const concurrent = client.listCalls;
+
+    const alone = harness();
+    await alone.service.listComments(tenant, post.id, { limit: 25 });
+
+    expect(concurrent).toBe(alone.client.listCalls);
+    for (const page of pages) expect(page.items).toHaveLength(3);
+  });
+
+  it('gives a joining caller the same answer it would have had alone', async () => {
+    const { service } = harness();
+
+    const [first, second] = await Promise.all([
+      service.listComments(tenant, post.id, { limit: 25 }),
+      service.listComments(tenant, post.id, { limit: 25 }),
+    ]);
+
+    expect(second.items.map((item) => item.id)).toEqual(first.items.map((item) => item.id));
+    expect(second.pagination).toEqual(first.pagination);
+  });
+
+  it('records whether a request ran a hydration or joined one', async () => {
+    const { service, logger } = harness();
+
+    await Promise.all([
+      service.listComments(tenant, post.id, { limit: 25 }),
+      service.listComments(tenant, post.id, { limit: 25 }),
+    ]);
+
+    expect(logger.find('comments.list.hydration_joined')).toBeDefined();
+    expect(logger.find('comments.list.hydration_joined')?.fields.waitedMs).toEqual(
+      expect.any(Number),
+    );
+  });
+
+  it('does not leave a post in flight when hydration fails', async () => {
+    let attempts = 0;
+    const client = new CountingClient({
+      listComments: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new ProviderUnavailableError('temporarily down');
+        return {
+          items: [externalComment('ig-comment-1', '2026-08-01T10:00:00.000Z')],
+          nextCursor: null,
+          hasMore: false,
+        };
+      },
+      replyToComment: async () => {
+        throw new Error('not used');
+      },
+    });
+    const service = new CommentService(
+      new InMemoryCommentRepository([], tenant.accountId),
+      new InMemoryPostRepository([post]),
+      new InMemoryReplyOperationRepository(),
+      new InMemoryPlatformProviderRegistry(
+        new Map([
+          [
+            post.platform,
+            new AdaptiveProviderAdapter(
+              post.platform,
+              client,
+              new Set(['list_comments']),
+              providerPolicies(immediatePolicy),
+            ),
+          ],
+        ]),
+      ),
+    );
+
+    await expect(service.listComments(tenant, post.id, { limit: 25 })).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+
+    // The next request must retry rather than wait on a promise nobody owns.
+    await expect(service.listComments(tenant, post.id, { limit: 25 })).resolves.toMatchObject({
+      items: [expect.objectContaining({ body: 'body of ig-comment-1' })],
+    });
+  });
+
+  it('keeps in-flight state out of other compositions', async () => {
+    // Module-level state would make one test's hydration visible to another's.
+    const first = harness();
+    const second = harness();
+
+    await Promise.all([
+      first.service.listComments(tenant, post.id, { limit: 25 }),
+      second.service.listComments(tenant, post.id, { limit: 25 }),
+    ]);
+
+    expect(first.client.listCalls).toBeGreaterThan(0);
+    expect(second.client.listCalls).toBeGreaterThan(0);
+  });
+
+  it('stops hydrating when another writer advanced the snapshot first', async () => {
+    // Retrying against a moving target loops under sustained concurrency, so a
+    // losing writer keeps the newer state and stops. Without this branch the
+    // loop would run to its twenty-call bound against a provider that has
+    // nothing left to give.
+    const posts = new InMemoryPostRepository([post]);
+    const winner = {
+      providerCursor: null,
+      exhausted: true,
+      completedAt: '2026-08-02T00:00:00.000Z',
+    };
+    posts.saveSnapshotState = async () => false;
+    posts.findPublishedById = async () => ({ post, snapshot: winner });
+
+    const client = new CountingClient(
+      new FixtureProviderClient({
+        commentsByPost: new Map([
+          [post.externalPostId, [externalComment('ig-comment-1', '2026-08-01T10:00:00.000Z')]],
+        ]),
+        maxPageSize: 1,
+        now: () => '2026-08-02T12:00:00.000Z',
+      }),
+    );
+    const logger = new RecordingLogger();
+    const service = new CommentService(
+      new InMemoryCommentRepository([], tenant.accountId),
+      posts,
+      new InMemoryReplyOperationRepository(),
+      new InMemoryPlatformProviderRegistry(
+        new Map([
+          [
+            post.platform,
+            new AdaptiveProviderAdapter(
+              post.platform,
+              client,
+              new Set(['list_comments']),
+              providerPolicies(immediatePolicy),
+            ),
+          ],
+        ]),
+      ),
+      noopMetrics,
+      logger,
+    );
+
+    const result = await service.listComments(tenant, post.id, { limit: 25 });
+
+    expect(client.listCalls).toBe(1);
+    expect(logger.find('comments.snapshot.conflict')).toBeDefined();
+    // The winner's state is what the response reports, not this run's.
+    expect(result.snapshot.syncedAt).toBe(winner.completedAt);
+  });
+
+  it('does not let a stale writer move the snapshot backwards', async () => {
+    const posts = new InMemoryPostRepository([post]);
+    const start = (await posts.findPublishedById(tenant, post.id))!.snapshot;
+    const ahead = { providerCursor: 'page-9', exhausted: false, completedAt: null };
+    const behind = { providerCursor: 'page-2', exhausted: false, completedAt: null };
+
+    await expect(posts.saveSnapshotState(tenant, post.id, ahead, start)).resolves.toBe(true);
+    await expect(posts.saveSnapshotState(tenant, post.id, behind, start)).resolves.toBe(false);
+
+    await expect(posts.findPublishedById(tenant, post.id)).resolves.toMatchObject({
+      snapshot: { providerCursor: 'page-9' },
+    });
+  });
+});
+
 describe('provider authorization context', () => {
   /**
    * Two tenants on one platform, sharing the single adapter instance the
