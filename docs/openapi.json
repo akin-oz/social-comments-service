@@ -110,6 +110,25 @@
           }
         }
       },
+      "Snapshot": {
+        "type": "object",
+        "title": "Snapshot",
+        "description": "How current the local snapshot of this post is.",
+        "required": [
+          "syncedAt"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "syncedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time",
+            "description": "When this post was last read through to the end at the provider, or null if it never has been. Comments published since may not be present."
+          }
+        }
+      },
       "Error": {
         "type": "object",
         "title": "Error",
@@ -209,7 +228,8 @@
                   "type": "object",
                   "required": [
                     "data",
-                    "pagination"
+                    "pagination",
+                    "snapshot"
                   ],
                   "additionalProperties": false,
                   "properties": {
@@ -221,6 +241,9 @@
                     },
                     "pagination": {
                       "$ref": "#/components/schemas/Pagination"
+                    },
+                    "snapshot": {
+                      "$ref": "#/components/schemas/Snapshot"
                     }
                   }
                 }

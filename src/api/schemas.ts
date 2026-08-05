@@ -79,6 +79,23 @@ export const paginationSchema = {
   },
 } as const;
 
+export const snapshotSchema = {
+  $id: 'Snapshot',
+  type: 'object',
+  title: 'Snapshot',
+  description: 'How current the local snapshot of this post is.',
+  required: ['syncedAt'],
+  additionalProperties: false,
+  properties: {
+    syncedAt: {
+      type: ['string', 'null'],
+      format: 'date-time',
+      description:
+        'When this post was last read through to the end at the provider, or null if it never has been. Comments published since may not be present.',
+    },
+  },
+} as const;
+
 export const errorSchema = {
   $id: 'Error',
   type: 'object',
@@ -102,7 +119,7 @@ export const errorSchema = {
   },
 } as const;
 
-export const sharedSchemas = [commentSchema, paginationSchema, errorSchema];
+export const sharedSchemas = [commentSchema, paginationSchema, snapshotSchema, errorSchema];
 
 const errorDescriptions: Readonly<Record<number, string>> = {
   400: 'The request cannot be parsed or validated.',

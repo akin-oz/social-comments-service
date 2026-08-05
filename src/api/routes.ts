@@ -116,11 +116,12 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
           200: {
             description: 'A page of comments.',
             type: 'object',
-            required: ['data', 'pagination'],
+            required: ['data', 'pagination', 'snapshot'],
             additionalProperties: false,
             properties: {
               data: { type: 'array', items: { $ref: 'Comment#' } },
               pagination: { $ref: 'Pagination#' },
+              snapshot: { $ref: 'Snapshot#' },
             },
           },
           ...errorResponses([400, 401, 404, 422, 429, 500, 502, 503]),
@@ -134,9 +135,11 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
         request.params.postId,
         { limit: limit ?? DEFAULT_LIMIT, ...(cursor === undefined ? {} : { cursor }) },
       );
-      return reply
-        .code(200)
-        .send({ data: result.items.map(serializeComment), pagination: result.pagination });
+      return reply.code(200).send({
+        data: result.items.map(serializeComment),
+        pagination: result.pagination,
+        snapshot: result.snapshot,
+      });
     },
   );
 

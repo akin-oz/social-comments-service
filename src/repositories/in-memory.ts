@@ -146,6 +146,7 @@ export class InMemoryPostRepository implements PostRepository {
     const snapshot = this.snapshots.get(scopedKey(context.accountId, postId)) ?? {
       providerCursor: null,
       exhausted: false,
+      completedAt: null,
     };
     return { post, snapshot };
   }

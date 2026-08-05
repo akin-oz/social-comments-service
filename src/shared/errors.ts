@@ -46,6 +46,18 @@ export class ProviderError extends ServiceError {
 }
 
 /**
+ * The provider refused a continuation token the service had stored. Vendors
+ * document that cursors must not be stored, so this is expected rather than
+ * exceptional: the stream restarts (Spec-014).
+ */
+export class ProviderCursorRejectedError extends ServiceError {
+  public constructor(message: string) {
+    super('PROVIDER_ERROR', message, 502);
+    this.name = 'ProviderCursorRejectedError';
+  }
+}
+
+/**
  * The provider applied a rate limit. `retryAfterMs` carries the provider's own
  * guidance when it supplies one, so the caller is never told to guess.
  */

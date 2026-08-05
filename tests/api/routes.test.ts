@@ -26,7 +26,7 @@ describe('comment REST API', () => {
     const { statusCode, body } = await listComments(app);
 
     expect(statusCode).toBe(200);
-    expect(body.data).toHaveLength(2);
+    expect(body.data).toHaveLength(3);
     expect(body.data[0]).toEqual({
       id: expect.any(String),
       postId: demoPost.id,

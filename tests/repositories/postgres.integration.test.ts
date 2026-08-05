@@ -133,6 +133,7 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     await posts.saveSnapshotState(contextA, tenantA.postId, {
       providerCursor: 'provider-page-2',
       exhausted: false,
+      completedAt: null,
     });
     await expect(posts.findPublishedById(contextA, tenantA.postId)).resolves.toMatchObject({
       snapshot: { providerCursor: 'provider-page-2', exhausted: false },
@@ -141,6 +142,7 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     await posts.saveSnapshotState(contextA, tenantA.postId, {
       providerCursor: null,
       exhausted: true,
+      completedAt: '2026-08-01T10:00:00.000Z',
     });
     await expect(posts.findPublishedById(contextA, tenantA.postId)).resolves.toMatchObject({
       snapshot: { providerCursor: null, exhausted: true },
@@ -153,6 +155,7 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     await posts.saveSnapshotState(contextA, tenantB.postId, {
       providerCursor: 'forged',
       exhausted: true,
+      completedAt: null,
     });
     const after = await posts.findPublishedById(contextB, tenantB.postId);
 

@@ -38,7 +38,11 @@ The post’s platform is resolved from the authenticated account and post record
 
 The service answers from its local snapshot of the post’s comments. When the snapshot cannot fill the requested page and the provider stream has not been read to its end, it fetches the next page from the provider, stores it, and serves the result. Once a post has been read through, further requests are served locally with no provider traffic.
 
-One provider page is fetched per request, so a response may contain fewer comments than `limit` while `hasMore` is still `true`. `hasMore` reflects whether more comments exist, not whether this response filled the page.
+Starting a pagination run — a request with no cursor — reads the post through to the end of the provider stream before answering, so the run then pages a snapshot that does not move underneath it. Provider order is not this API's order: several platforms return newest first, and without completing the snapshot those comments would land behind an ascending cursor and never be returned. Completion is bounded, so a very large post may still report `hasMore` with the run continuing.
+
+`hasMore` reflects whether more comments exist, not whether this response filled the page, and a response may contain fewer than `limit`.
+
+Every response carries `snapshot.syncedAt`: when the post was last read through at the provider, or `null` if it never has been. Comments published since may not be present. A completed snapshot is re-read once it ages past the service's snapshot lifetime, so a post does not stay frozen at the moment it was first read.
 
 ### Request
 
@@ -68,8 +72,11 @@ X-Account-Id: 2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b001
     }
   ],
   "pagination": {
-    "nextCursor": "eyJhIjpbIjIwMjYtMDgtMDFUMTA6MDA6MDAuMDAwWiIsImJlYjVkMTMzLWU1NGQtNTk5OC05MWQwLTI1ZjQ5ZjI0YWE3ZSJdLCJwIjoiTWcifQ",
+    "nextCursor": "eyJhIjpbIjIwMjYtMDgtMDFUMTA6MDA6MDAuMDAwWiIsImJlYjVkMTMzLWU1NGQtNTk5OC05MWQwLTI1ZjQ5ZjI0YWE3ZSJdfQ",
     "hasMore": true
+  },
+  "snapshot": {
+    "syncedAt": "2026-08-01T12:00:00.000Z"
   }
 }
 ```

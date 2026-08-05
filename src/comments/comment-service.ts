@@ -1,4 +1,9 @@
-import { NotFoundError, ServiceError, toFailureCode } from '../shared/errors.js';
+import {
+  NotFoundError,
+  ProviderCursorRejectedError,
+  ServiceError,
+  toFailureCode,
+} from '../shared/errors.js';
 import { decodeCursor, encodeCursor } from '../shared/cursor.js';
 import {
   validateListCommentsQuery,
@@ -30,6 +35,32 @@ export interface ListCommentsRequest {
   limit: number;
   cursor?: PageCursor;
 }
+
+/**
+ * Bounds how many provider calls one request may make. Completing a snapshot is
+ * what makes pagination stable, but it must not become unbounded work inside a
+ * single read: past the bound the caller is told there is more and the next
+ * request continues (Spec-014).
+ */
+const MAX_HYDRATIONS_PER_REQUEST = 20;
+
+/** Page size requested from a provider while completing a snapshot. */
+const PROVIDER_PAGE_LIMIT = 100;
+
+const DEFAULT_SNAPSHOT_LIFETIME_SECONDS = 300;
+
+function snapshotLifetimeMs(): number {
+  const configured = Number(process.env.SNAPSHOT_LIFETIME_SECONDS);
+  const seconds =
+    Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_SNAPSHOT_LIFETIME_SECONDS;
+  return seconds * 1000;
+}
+
+const emptySnapshotState: PostSnapshotState = {
+  providerCursor: null,
+  exhausted: false,
+  completedAt: null,
+};
 
 export class CommentService {
   public constructor(
@@ -65,32 +96,40 @@ export class CommentService {
 
     const startedAt = Date.now();
     try {
+      // A snapshot completed long enough ago is read again from the start:
+      // exhaustion without a lifetime hides every comment published since.
+      let state = this.stale(snapshot) ? emptySnapshotState : snapshot;
       let page = await this.comments.listByPost(context, query);
-      let providerCursor = snapshot.providerCursor;
-      let exhausted = snapshot.exhausted;
+      let hydrations = 0;
 
-      // Hydrate whenever the snapshot cannot fill the page and the provider
-      // stream has not been read to its end. Triggering on an empty page
-      // instead would leave a partly-synchronised post reporting no further
-      // results to any caller that did not carry a cursor (Spec-013).
-      const hydrated = page.items.length < request.limit && !exhausted;
-      if (hydrated) {
-        const fetched = await this.hydrate(context, post, providerCursor, request.limit);
-        providerCursor = fetched.providerCursor;
-        exhausted = fetched.exhausted;
-        await this.posts.saveSnapshotState(context, postId, { providerCursor, exhausted });
+      // A pagination run must read a snapshot that does not move underneath it.
+      // Provider order is not the service's order — Meta, X, and YouTube return
+      // newest first, so later provider pages land behind an ascending keyset
+      // and become unreachable for the rest of the run. Starting a run
+      // therefore completes the snapshot first; continuing one only tops it up
+      // when the page is short (Spec-014).
+      const startingRun = cursor.after === null;
+      while (
+        !state.exhausted &&
+        hydrations < MAX_HYDRATIONS_PER_REQUEST &&
+        (startingRun || page.items.length < request.limit)
+      ) {
+        state = await this.hydrate(context, post, state);
+        await this.posts.saveSnapshotState(context, postId, state);
         page = await this.comments.listByPost(context, query);
+        hydrations += 1;
       }
 
       const last = page.items[page.items.length - 1];
-      // Completeness of the snapshot decides this, never the caller's cursor.
-      const hasMore = last !== undefined && (page.hasMore || !exhausted);
+      // Completeness decides this, not whether this page happened to fill.
+      const hasMore = page.hasMore || !state.exhausted;
       const pagination = {
         hasMore,
         nextCursor: hasMore
           ? encodeCursor({
-              after: { publishedAt: last.publishedAt, id: last.id },
-              providerCursor,
+              // With nothing returned, the caller keeps its position and comes
+              // back; each request advances the snapshot.
+              after: last ? { publishedAt: last.publishedAt, id: last.id } : cursor.after,
             })
           : null,
       };
@@ -99,15 +138,23 @@ export class CommentService {
       const durationMs = Date.now() - startedAt;
       this.metrics.increment('comments.list.success', { platform: post.platform });
       this.metrics.observe('comments.list.duration_ms', durationMs, { platform: post.platform });
-      this.logger.info(hydrated ? 'comments.list.hydrated' : 'comments.list.served_from_cache', {
-        ...this.trace(context),
-        postId,
-        platform: post.platform,
-        returned: page.items.length,
-        hasMore,
-        durationMs,
-      });
-      return { items: page.items, pagination };
+      this.logger.info(
+        hydrations > 0 ? 'comments.list.hydrated' : 'comments.list.served_from_cache',
+        {
+          ...this.trace(context),
+          postId,
+          platform: post.platform,
+          returned: page.items.length,
+          hasMore,
+          hydrations,
+          durationMs,
+        },
+      );
+      return {
+        items: page.items,
+        pagination,
+        snapshot: { syncedAt: state.completedAt },
+      };
     } catch (error) {
       const code = toFailureCode(error);
       this.metrics.increment('comments.list.failure', { platform: post.platform, code });
@@ -257,25 +304,38 @@ export class CommentService {
   }
 
   /**
-   * Reads one provider page into the snapshot and reports how far the stream
-   * has been consumed. One page per request keeps a single read from making an
-   * unbounded number of provider calls, so a page may come back shorter than
-   * the requested limit while more remains upstream.
+   * Reads the next provider page into the snapshot and reports how far the
+   * stream has been consumed.
+   *
+   * A stored continuation is best-effort: vendors document that cursors must
+   * not be stored, because one is invalidated when the item it points at is
+   * deleted. A rejected cursor therefore restarts the stream rather than
+   * failing the read, which is safe because re-reading deduplicates on
+   * `(social_account_id, external_comment_id)` (Spec-014).
    */
   private async hydrate(
     context: RequestContext,
     post: PublishedPost,
-    providerCursor: string | null,
-    limit: number,
+    state: PostSnapshotState,
   ): Promise<PostSnapshotState> {
     const provider = this.providers.get(post.platform);
     requireCapability(provider, 'list_comments');
     const startedAt = Date.now();
-    const page = await provider.listComments({
-      post,
-      limit,
-      ...(providerCursor === null ? {} : { providerCursor }),
-    });
+
+    let page;
+    try {
+      page = await this.fetchPage(provider, post, state.providerCursor);
+    } catch (error) {
+      if (!(error instanceof ProviderCursorRejectedError)) throw error;
+      this.metrics.increment('comments.list.cursor_rejected', { platform: post.platform });
+      this.logger.warn('provider.cursor.rejected', {
+        ...this.trace(context),
+        platform: post.platform,
+        postId: post.id,
+      });
+      page = await this.fetchPage(provider, post, null);
+    }
+
     if (page.items.length > 0) await this.comments.upsertMany(context, page.items);
     this.metrics.increment('comments.list.hydrated', { platform: post.platform });
     this.logger.info('provider.list.completed', {
@@ -286,9 +346,28 @@ export class CommentService {
       hasMore: page.hasMore,
       durationMs: Date.now() - startedAt,
     });
+
     return page.hasMore
-      ? { providerCursor: page.nextProviderCursor, exhausted: false }
-      : { providerCursor: null, exhausted: true };
+      ? { providerCursor: page.nextProviderCursor, exhausted: false, completedAt: null }
+      : { providerCursor: null, exhausted: true, completedAt: new Date().toISOString() };
+  }
+
+  private async fetchPage(
+    provider: ReturnType<PlatformProviderRegistry['get']>,
+    post: PublishedPost,
+    providerCursor: string | null,
+  ) {
+    return provider.listComments({
+      post,
+      limit: PROVIDER_PAGE_LIMIT,
+      ...(providerCursor === null ? {} : { providerCursor }),
+    });
+  }
+
+  /** True when a completed snapshot is old enough to be worth reading again. */
+  private stale(state: PostSnapshotState): boolean {
+    if (!state.exhausted || state.completedAt === null) return false;
+    return Date.now() - Date.parse(state.completedAt) > snapshotLifetimeMs();
   }
 
   private trace(context: RequestContext): LogFields {

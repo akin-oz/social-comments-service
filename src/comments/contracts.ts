@@ -26,6 +26,8 @@ export interface CommentPage {
 export interface ListCommentsResult {
   items: Comment[];
   pagination: Pagination;
+  /** How current the local snapshot is, so a client need not assume (Spec-014). */
+  snapshot: { syncedAt: string | null };
 }
 
 export interface ReplyToCommentCommand {
@@ -59,6 +61,12 @@ export interface PostSnapshotState {
   providerCursor: string | null;
   /** True once the provider stream has been read to its end. */
   exhausted: boolean;
+  /**
+   * When the stream was last read to its end, or null while incomplete.
+   * Exhaustion without a lifetime is a one-way latch that hides every comment
+   * published afterwards (Spec-014).
+   */
+  completedAt: string | null;
 }
 
 export interface PublishedPostRecord {

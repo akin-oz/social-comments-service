@@ -12,7 +12,11 @@ import {
   InMemoryPostRepository,
   InMemoryReplyOperationRepository,
 } from '../../src/repositories/in-memory.js';
-import { ProviderRateLimitError, ServiceError } from '../../src/shared/errors.js';
+import {
+  ProviderCursorRejectedError,
+  ProviderRateLimitError,
+  ServiceError,
+} from '../../src/shared/errors.js';
 import type { ProviderCapability } from '../../src/comments/contracts.js';
 import { noopMetrics, providerPolicies, type RetryPolicy } from '../../src/shared/observability.js';
 import { externalComment, post, RecordingLogger, tenant } from '../support/fixtures.js';
@@ -151,13 +155,15 @@ describe('listing comments', () => {
     const { service, client } = buildService({ maxPageSize: 2 });
 
     const first = await service.listComments(tenant, post.id, { limit: 2 });
+    const afterFirst = client.listCalls;
     const second = await service.listComments(tenant, post.id, { limit: 2 });
 
     expect(first.pagination.hasMore).toBe(true);
     expect(second.pagination.hasMore).toBe(true);
     expect(second.items.map((item) => item.id)).toEqual(first.items.map((item) => item.id));
-    // Answering correctly costs no extra provider traffic here.
-    expect(client.listCalls).toBe(1);
+    // Starting a run completes the snapshot (Spec-014 revises Spec-013's
+    // one-page-per-request rule), so the second run costs no provider traffic.
+    expect(client.listCalls).toBe(afterFirst);
   });
 
   it('reports no more results once the provider stream is exhausted', async () => {
@@ -192,6 +198,92 @@ describe('listing comments', () => {
     expect(first.pagination.hasMore).toBe(false);
     expect(second.pagination.hasMore).toBe(false);
     expect(client.listCalls).toBe(1);
+  });
+
+  it('returns every comment when the provider orders newest first', async () => {
+    // Provider order is not the service's order. Meta, X, and YouTube return
+    // newest first, so later provider pages land behind an ascending keyset.
+    // Hydrating one page per request left them unreachable: this saw 2 of 6.
+    const newestFirst = [6, 5, 4, 3, 2, 1].map((n) =>
+      externalComment(`c${n}`, `2026-08-01T1${n}:00:00.000Z`),
+    );
+    const { service } = buildService({
+      client: new FixtureProviderClient({
+        commentsByPost: new Map([[post.externalPostId, newestFirst]]),
+        maxPageSize: 2,
+      }),
+    });
+
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 12; page += 1) {
+      const result = await service.listComments(tenant, post.id, {
+        limit: 2,
+        ...(cursor === null ? {} : { cursor }),
+      });
+      seen.push(...result.items.map((item) => item.id));
+      cursor = result.pagination.nextCursor;
+      if (cursor === null) break;
+    }
+
+    expect(seen).toHaveLength(6);
+    expect(new Set(seen).size).toBe(6);
+  });
+
+  it('reports the snapshot it answered from', async () => {
+    const { service } = buildService();
+
+    const result = await service.listComments(tenant, post.id, { limit: 25 });
+
+    // Completing the stream records when, so a client can reason about
+    // freshness rather than assume it.
+    expect(result.snapshot.syncedAt).toEqual(expect.any(String));
+  });
+
+  it('reads the provider again once a completed snapshot goes stale', async () => {
+    const previous = process.env.SNAPSHOT_LIFETIME_SECONDS;
+    process.env.SNAPSHOT_LIFETIME_SECONDS = '0.001';
+    try {
+      const { service, client } = buildService();
+      await service.listComments(tenant, post.id, { limit: 25 });
+      const afterFirst = client.listCalls;
+
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      await service.listComments(tenant, post.id, { limit: 25 });
+
+      // Exhaustion without a lifetime hides every comment published since.
+      expect(client.listCalls).toBeGreaterThan(afterFirst);
+    } finally {
+      if (previous === undefined) delete process.env.SNAPSHOT_LIFETIME_SECONDS;
+      else process.env.SNAPSHOT_LIFETIME_SECONDS = previous;
+    }
+  });
+
+  it('restarts the stream when the provider rejects a stored cursor', async () => {
+    let calls = 0;
+    const { service } = buildService({
+      client: {
+        listComments: async (query) => {
+          calls += 1;
+          if (query.cursor !== undefined) {
+            throw new ProviderCursorRejectedError('that cursor is no longer valid');
+          }
+          return {
+            items: [externalComment('c1', '2026-08-01T10:00:00.000Z')],
+            nextCursor: calls === 1 ? 'stale-token' : null,
+            hasMore: calls === 1,
+          };
+        },
+        replyToComment: async () => {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    const result = await service.listComments(tenant, post.id, { limit: 25 });
+
+    // Replay is safe: re-reading deduplicates on the provider identity.
+    expect(result.items).toHaveLength(1);
   });
 
   it('rejects a cursor the service did not issue', async () => {

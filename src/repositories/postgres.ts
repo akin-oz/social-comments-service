@@ -40,6 +40,7 @@ interface PostRow {
   published_at: string;
   provider_cursor: string | null;
   provider_exhausted: boolean;
+  provider_completed_at: string | null;
 }
 
 interface OperationRow {
@@ -116,7 +117,7 @@ export class PostgresPostRepository implements PostRepository {
     return this.db.withTenant(context.accountId, async (tx) => {
       const result = await tx.query<PostRow>(
         `select p.id, p.account_id, sa.platform, p.external_post_id, p.published_at,
-                p.provider_cursor, p.provider_exhausted
+                p.provider_cursor, p.provider_exhausted, p.provider_completed_at
          from posts p
          join social_accounts sa on sa.id = p.social_account_id
          where p.id = $1 and p.account_id = $2 and p.status = 'published'`,
@@ -135,6 +136,10 @@ export class PostgresPostRepository implements PostRepository {
         snapshot: {
           providerCursor: row.provider_cursor,
           exhausted: row.provider_exhausted,
+          completedAt:
+            row.provider_completed_at === null
+              ? null
+              : new Date(row.provider_completed_at).toISOString(),
         },
       };
     });
@@ -147,9 +152,10 @@ export class PostgresPostRepository implements PostRepository {
   ): Promise<void> {
     await this.db.withTenant(context.accountId, async (tx) => {
       await tx.query(
-        `update posts set provider_cursor = $1, provider_exhausted = $2
-         where id = $3 and account_id = $4`,
-        [state.providerCursor, state.exhausted, postId, context.accountId],
+        `update posts set provider_cursor = $1, provider_exhausted = $2,
+           provider_completed_at = $3
+         where id = $4 and account_id = $5`,
+        [state.providerCursor, state.exhausted, state.completedAt, postId, context.accountId],
       );
     });
   }

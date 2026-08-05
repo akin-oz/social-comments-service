@@ -30,6 +30,8 @@ The events worth knowing:
 | `comments.reply.conflict`         | warn  | An idempotency key was reused while in flight.                     |
 | `comments.reply.failed`           | warn  | A reply failed; carries the taxonomy `code`.                       |
 | `provider.call.retried`           | warn  | A provider call was retried; carries `code` and `delayMs`.         |
+| `provider.cursor.rejected`        | warn  | A stored continuation was refused; the stream restarted.           |
+| `comments.reply.orphaned`         | error | A reply published but could not be stored; the key stays pending.  |
 | `http.request.rejected`           | warn  | A request was refused; carries the typed `code`.                   |
 | `http.request.failed`             | error | An unhandled failure. This is the only routine alert-worthy event. |
 
@@ -38,6 +40,8 @@ The ratio of `comments.list.hydrated` to `comments.list.served_from_cache` is th
 A rejected client request is logged at warn, never error. Reserving error for failures the service did not anticipate keeps the level meaningful for alerting.
 
 Logs never contain comment bodies, author display names, credentials, or provider tokens. Where content matters operationally the record carries a measurement instead, such as `bodyLength` or `fetched`. The client address and port are omitted, since behind an internal gateway they describe the gateway rather than the caller.
+
+`SNAPSHOT_LIFETIME_SECONDS` sets how long a completed snapshot is trusted before a read refreshes it, defaulting to 300. One read completes a post's stream, bounded at 20 provider calls per request, after which the caller is told there is more and the next request continues.
 
 `LOG_LEVEL` sets verbosity and defaults to `info`. Metric counters and timings are emitted at `debug` in compositions that have not selected a metrics backend, so `pnpm dev` shows them without a collector.
 
