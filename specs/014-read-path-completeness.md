@@ -1,8 +1,8 @@
 ---
 spec: 014
 title: Make the read path reachable, refreshable, and honest about freshness
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: platform-integration
 depends_on:
   - Spec-008

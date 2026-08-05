@@ -1,0 +1,11 @@
+-- Lets the database assign comment identity (ADR-0013).
+--
+-- Identity was derived as uuidv5 over (platform, external_comment_id), while
+-- the constraint that governs storage is (social_account_id,
+-- external_comment_id). Two tenants connecting the same provider account
+-- therefore derived one primary key: the second insert violated comments_pkey
+-- rather than the conflict target the upsert names, so it was unhandled, the
+-- hydration batch rolled back, and row-level security hid the colliding row.
+--
+-- Assigning identity here scopes it exactly where the constraint scopes it.
+alter table comments alter column id set default gen_random_uuid();

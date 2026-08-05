@@ -7,9 +7,8 @@ import {
   PostgresPostRepository,
   PostgresReplyOperationRepository,
 } from '../../src/repositories/postgres.js';
-import { internalCommentId } from '../../src/shared/identity.js';
 import { seedTenants } from '../../src/seed-data.js';
-import type { NormalizedComment, TenantContext } from '../../src/shared/types.js';
+import type { ObservedComment, TenantContext } from '../../src/shared/types.js';
 import type { CommentPage } from '../../src/comments/contracts.js';
 
 /**
@@ -26,22 +25,14 @@ const tenantB = seedTenants[1]!;
 const contextA: TenantContext = { accountId: tenantA.accountId };
 const contextB: TenantContext = { accountId: tenantB.accountId };
 
-function comment(
-  tenant: typeof tenantA,
-  externalId: string,
-  publishedAt: string,
-): NormalizedComment {
+function comment(tenant: typeof tenantA, externalId: string, publishedAt: string): ObservedComment {
   return {
-    comment: {
-      id: internalCommentId(tenant.platform, externalId),
-      postId: tenant.postId,
-      platform: tenant.platform,
-      author: { id: `author-${externalId}`, displayName: 'Ada Lovelace' },
-      body: `body of ${externalId}`,
-      parentCommentId: null,
-      publishedAt,
-      updatedAt: publishedAt,
-    },
+    postId: tenant.postId,
+    platform: tenant.platform,
+    author: { id: `author-${externalId}`, displayName: 'Ada Lovelace' },
+    body: `body of ${externalId}`,
+    publishedAt,
+    updatedAt: publishedAt,
     externalId,
     externalParentCommentId: null,
   };
@@ -52,6 +43,9 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
   let comments: PostgresCommentRepository;
   let posts: PostgresPostRepository;
   let operations: PostgresReplyOperationRepository;
+  /** Identities the database assigned, captured for tests that need one. */
+  let storedA: readonly string[] = [];
+  let storedB: readonly string[] = [];
 
   beforeAll(async () => {
     database = new PostgresDatabase(appUrl!);
@@ -59,14 +53,18 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     posts = new PostgresPostRepository(database);
     operations = new PostgresReplyOperationRepository(database);
 
-    await comments.upsertMany(contextA, [
-      comment(tenantA, 'a-comment-1', '2026-08-01T10:00:00.000Z'),
-      comment(tenantA, 'a-comment-2', '2026-08-01T11:00:00.000Z'),
-      comment(tenantA, 'a-comment-3', '2026-08-01T12:00:00.000Z'),
-    ]);
-    await comments.upsertMany(contextB, [
-      comment(tenantB, 'b-comment-1', '2026-08-01T10:30:00.000Z'),
-    ]);
+    storedA = (
+      await comments.upsertMany(contextA, [
+        comment(tenantA, 'a-comment-1', '2026-08-01T10:00:00.000Z'),
+        comment(tenantA, 'a-comment-2', '2026-08-01T11:00:00.000Z'),
+        comment(tenantA, 'a-comment-3', '2026-08-01T12:00:00.000Z'),
+      ])
+    ).map((item) => item.id);
+    storedB = (
+      await comments.upsertMany(contextB, [
+        comment(tenantB, 'b-comment-1', '2026-08-01T10:30:00.000Z'),
+      ])
+    ).map((item) => item.id);
   });
 
   afterAll(async () => {
@@ -84,6 +82,43 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     const row = result.rows[0]!;
     expect(row.current_user).toBe('comments_app');
     expect(row.current_user).not.toBe(row.owner);
+  });
+
+  it('gives two tenants observing the same provider comment two rows', async () => {
+    // The collision ADR-0013 exists to prevent. Deriving identity from
+    // (platform, externalId) gave both tenants one primary key, so the second
+    // insert violated comments_pkey rather than the named conflict target and
+    // rolled back the whole batch. Two tenants connecting one Instagram account
+    // is an ordinary agency arrangement the schema deliberately permits.
+    const shared = `shared-${crypto.randomUUID()}`;
+
+    const [forA] = await comments.upsertMany(contextA, [
+      comment(tenantA, shared, '2026-08-01T13:00:00.000Z'),
+    ]);
+    const [forB] = await comments.upsertMany(contextB, [
+      comment(tenantB, shared, '2026-08-01T13:00:00.000Z'),
+    ]);
+
+    expect(forA!.id).not.toBe(forB!.id);
+    await expect(comments.findById(contextA, forA!.id)).resolves.toMatchObject({ id: forA!.id });
+    await expect(comments.findById(contextB, forB!.id)).resolves.toMatchObject({ id: forB!.id });
+    // Each tenant sees only its own row.
+    await expect(comments.findById(contextA, forB!.id)).resolves.toBeNull();
+  });
+
+  it('resolves a reply parent to the stored row rather than a derived value', async () => {
+    const parentExternal = `parent-${crypto.randomUUID()}`;
+    const [parent] = await comments.upsertMany(contextA, [
+      comment(tenantA, parentExternal, '2026-08-01T14:00:00.000Z'),
+    ]);
+    const [reply] = await comments.upsertMany(contextA, [
+      {
+        ...comment(tenantA, `reply-${crypto.randomUUID()}`, '2026-08-01T14:01:00.000Z'),
+        externalParentCommentId: parentExternal,
+      },
+    ]);
+
+    expect(reply!.parentCommentId).toBe(parent!.id);
   });
 
   it('resolves a published post for its own tenant only', async () => {
@@ -178,7 +213,8 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     });
     expect(page.items).toEqual([]);
 
-    const foreign = internalCommentId(tenantB.platform, 'b-comment-1');
+    // Tenant B's identity, assigned by the database; tenant A must not resolve it.
+    const foreign = storedB[0]!;
     await expect(comments.findById(contextA, foreign)).resolves.toBeNull();
     await expect(comments.resolveExternalId(contextA, foreign)).resolves.toBeNull();
   });
@@ -216,7 +252,7 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     // that already holds rows from a previous run.
     const operation = {
       id: crypto.randomUUID(),
-      commentId: internalCommentId(tenantA.platform, 'a-comment-1'),
+      commentId: storedA[0]!,
       idempotencyKey: `integration-${crypto.randomUUID()}`,
       requestFingerprint: 'fingerprint',
       status: 'pending' as const,
@@ -237,7 +273,7 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     const other = await operations.claim(contextB, {
       ...operation,
       id: crypto.randomUUID(),
-      commentId: internalCommentId(tenantB.platform, 'b-comment-1'),
+      commentId: storedB[0]!,
     });
     expect(other.claimed).toBe(true);
   });

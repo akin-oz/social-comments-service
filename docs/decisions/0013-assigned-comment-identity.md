@@ -1,7 +1,7 @@
 ---
 adr: 0013
 title: Assign comment identity instead of deriving it
-status: proposed
+status: accepted
 supersedes: ADR-0010
 ---
 

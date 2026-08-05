@@ -2,7 +2,7 @@ import type {
   Comment,
   CommentKeyset,
   ExternalAuthor,
-  NormalizedComment,
+  ObservedComment,
   Pagination,
   Platform,
 } from './types.js';
@@ -48,15 +48,20 @@ export function validateComment(comment: Comment): void {
   }
 }
 
-export function validateNormalizedComment(record: NormalizedComment): void {
-  validateComment(record.comment);
+export function validateObservedComment(observed: ObservedComment): void {
   if (
-    !isNonEmptyString(record.externalId) ||
-    !isNullableNonEmptyString(record.externalParentCommentId)
+    !isNonEmptyString(observed.postId) ||
+    !isPlatform(observed.platform) ||
+    !isValidAuthor(observed.author) ||
+    !isNonEmptyString(observed.body) ||
+    !isNonEmptyString(observed.publishedAt) ||
+    !isNonEmptyString(observed.updatedAt) ||
+    !isNonEmptyString(observed.externalId) ||
+    !isNullableNonEmptyString(observed.externalParentCommentId)
   ) {
     throw new DomainValidationError(
       'INVALID_COMMENT',
-      'A normalized comment must retain the provider identifiers used for deduplication.',
+      'An observed comment requires a post, supported platform, author, body, timestamps, and the provider identifiers used for deduplication.',
     );
   }
 }

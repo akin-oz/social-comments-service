@@ -13,7 +13,6 @@ import {
   InMemoryReplyOperationRepository,
 } from '../../src/repositories/in-memory.js';
 import { ProviderRateLimitError, ServiceError } from '../../src/shared/errors.js';
-import { internalCommentId } from '../../src/shared/identity.js';
 import type { ProviderCapability } from '../../src/comments/contracts.js';
 import { noopMetrics, providerPolicies, type RetryPolicy } from '../../src/shared/observability.js';
 import { externalComment, post, RecordingLogger, tenant } from '../support/fixtures.js';
@@ -216,8 +215,10 @@ describe('listing comments', () => {
 describe('replying to a comment', () => {
   async function withCachedComments(options: Harness = {}) {
     const harness = buildService(options);
-    await harness.service.listComments(tenant, post.id, { limit: 25 });
-    return { ...harness, parentId: internalCommentId(post.platform, 'ig-comment-1') };
+    // Identity is assigned by persistence, so the parent is whatever the read
+    // returned rather than a value the test can compute (ADR-0013).
+    const listed = await harness.service.listComments(tenant, post.id, { limit: 25 });
+    return { ...harness, parentId: listed.items[0]!.id };
   }
 
   it('publishes the reply and stores it against the internal post', async () => {
@@ -315,7 +316,7 @@ describe('replying to a comment', () => {
     const { service } = await withCachedComments();
 
     await expect(
-      service.replyToComment(tenant, internalCommentId(post.platform, 'never-seen'), 'Hi', 'key-1'),
+      service.replyToComment(tenant, crypto.randomUUID(), 'Hi', 'key-1'),
     ).rejects.toMatchObject({ code: 'COMMENT_NOT_FOUND', statusCode: 404 });
   });
 
@@ -367,8 +368,8 @@ describe('observability', () => {
 
   it('records a published reply and its replay separately', async () => {
     const { service, logger } = buildService();
-    await service.listComments(tenant, post.id, { limit: 25 });
-    const parentId = internalCommentId(post.platform, 'ig-comment-1');
+    const listed = await service.listComments(tenant, post.id, { limit: 25 });
+    const parentId = listed.items[0]!.id;
 
     await service.replyToComment(tenant, parentId, 'Thank you!', 'key-1');
     await service.replyToComment(tenant, parentId, 'Thank you!', 'key-1');
@@ -379,8 +380,8 @@ describe('observability', () => {
 
   it('never writes comment bodies or author names into the log', async () => {
     const { service, logger } = buildService();
-    await service.listComments(tenant, post.id, { limit: 25 });
-    const parentId = internalCommentId(post.platform, 'ig-comment-1');
+    const listed = await service.listComments(tenant, post.id, { limit: 25 });
+    const parentId = listed.items[0]!.id;
     await service.replyToComment(tenant, parentId, 'a secret reply body', 'key-1');
 
     const serialized = JSON.stringify(logger.records);
@@ -402,8 +403,8 @@ describe('observability', () => {
         },
       },
     });
-    await service.listComments(tenant, post.id, { limit: 25 });
-    const parentId = internalCommentId(post.platform, 'ig-comment-1');
+    const listed = await service.listComments(tenant, post.id, { limit: 25 });
+    const parentId = listed.items[0]!.id;
 
     await expect(service.replyToComment(tenant, parentId, 'hi', 'key-1')).rejects.toThrow();
 

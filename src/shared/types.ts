@@ -28,12 +28,19 @@ export interface Comment {
 }
 
 /**
- * A comment plus the provider identity used to deduplicate it. Provider
- * identifiers stay out of {@link Comment} so they are never serialized to
- * API clients (ADR-0010).
+ * A comment as the provider reported it, before it has an identity.
+ *
+ * Identity is assigned by persistence (ADR-0013), so an adapter cannot produce
+ * a {@link Comment} — only the observation that becomes one. Provider
+ * identifiers live here and never reach an API client.
  */
-export interface NormalizedComment {
-  comment: Comment;
+export interface ObservedComment {
+  postId: string;
+  platform: Platform;
+  author: ExternalAuthor;
+  body: string;
+  publishedAt: string;
+  updatedAt: string;
   externalId: string;
   externalParentCommentId: string | null;
 }

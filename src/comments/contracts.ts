@@ -1,7 +1,7 @@
 import type {
   Comment,
   CommentKeyset,
-  NormalizedComment,
+  ObservedComment,
   Pagination,
   Platform,
   PublishedPost,
@@ -39,9 +39,10 @@ export interface CommentRepository {
   findById(context: TenantContext, commentId: string): Promise<Comment | null>;
   /** Translates an internal identity back to the provider identifier (ADR-0010). */
   resolveExternalId(context: TenantContext, commentId: string): Promise<string | null>;
+  /** Stores observations and returns them with the identities persistence assigned. */
   upsertMany(
     context: TenantContext,
-    records: readonly NormalizedComment[],
+    observed: readonly ObservedComment[],
   ): Promise<readonly Comment[]>;
 }
 
@@ -104,7 +105,7 @@ export interface ProviderListCommentsQuery {
 }
 
 export interface ProviderCommentPage {
-  items: NormalizedComment[];
+  items: ObservedComment[];
   nextProviderCursor: string | null;
   hasMore: boolean;
 }
@@ -117,7 +118,7 @@ export interface ProviderReplyCommand {
 
 export interface CommentPlatformProvider {
   listComments(query: ProviderListCommentsQuery): Promise<ProviderCommentPage>;
-  replyToComment(command: ProviderReplyCommand): Promise<NormalizedComment>;
+  replyToComment(command: ProviderReplyCommand): Promise<ObservedComment>;
 }
 
 export type ProviderCapability = 'list_comments' | 'reply_to_comment';

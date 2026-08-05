@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { AdaptiveProviderAdapter } from '../../src/platforms/adaptive-provider.js';
 import { FixtureProviderClient } from '../../src/platforms/fixture-provider.js';
-import { internalCommentId } from '../../src/shared/identity.js';
 import { ProviderError, ProviderUnavailableError } from '../../src/shared/errors.js';
 import { providerPolicies, providerRetryPolicy } from '../../src/shared/observability.js';
 import { externalComment, post } from '../support/fixtures.js';
@@ -32,16 +31,12 @@ describe('adaptive provider adapter', () => {
 
     expect(page).toEqual({
       items: [
-        {
-          comment: expect.objectContaining({
-            id: internalCommentId('instagram', 'ig-comment-1'),
-            postId: post.id,
-            platform: 'instagram',
-            parentCommentId: null,
-          }),
+        expect.objectContaining({
+          postId: post.id,
+          platform: 'instagram',
           externalId: 'ig-comment-1',
           externalParentCommentId: null,
-        },
+        }),
       ],
       nextProviderCursor: null,
       hasMore: false,
@@ -96,8 +91,9 @@ describe('adaptive provider adapter', () => {
     ]);
     // The provider omitted the parent, so the adapter restores it from the request.
     expect(reply.externalParentCommentId).toBe('ig-comment-1');
-    expect(reply.comment.parentCommentId).toBe(internalCommentId('instagram', 'ig-comment-1'));
-    expect(reply.comment.id).toBe(internalCommentId('instagram', 'ig-reply-1'));
+    expect(reply.externalId).toBe('ig-reply-1');
+    // The adapter assigns no identity; persistence does (ADR-0013).
+    expect(reply).not.toHaveProperty('id');
   });
 
   it('carries the provider continuation token through the page contract', async () => {

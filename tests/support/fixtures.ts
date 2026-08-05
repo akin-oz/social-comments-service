@@ -1,7 +1,6 @@
-import { internalCommentId } from '../../src/shared/identity.js';
 import type { ExternalCommentRecord } from '../../src/platforms/adaptive-provider.js';
 import type { LogFields, Logger } from '../../src/shared/observability.js';
-import type { NormalizedComment, PublishedPost, RequestContext } from '../../src/shared/types.js';
+import type { ObservedComment, PublishedPost, RequestContext } from '../../src/shared/types.js';
 
 export const tenant: RequestContext = { accountId: 'account-1', requestId: 'req-1' };
 export const otherTenant: RequestContext = { accountId: 'account-2', requestId: 'req-2' };
@@ -57,19 +56,15 @@ export function externalComment(externalId: string, publishedAt: string): Extern
   };
 }
 
-/** Builds the persisted form of a provider comment, mirroring adapter output. */
-export function normalizedComment(externalId: string, publishedAt: string): NormalizedComment {
+/** Builds the observation an adapter would produce for a provider comment. */
+export function observedComment(externalId: string, publishedAt: string): ObservedComment {
   return {
-    comment: {
-      id: internalCommentId(post.platform, externalId),
-      postId: post.id,
-      platform: post.platform,
-      author: { id: `author-${externalId}`, displayName: 'Ada Lovelace' },
-      body: `body of ${externalId}`,
-      parentCommentId: null,
-      publishedAt,
-      updatedAt: publishedAt,
-    },
+    postId: post.id,
+    platform: post.platform,
+    author: { id: `author-${externalId}`, displayName: 'Ada Lovelace' },
+    body: `body of ${externalId}`,
+    publishedAt,
+    updatedAt: publishedAt,
     externalId,
     externalParentCommentId: null,
   };

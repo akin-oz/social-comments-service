@@ -1,6 +1,5 @@
 import { ProviderError } from '../shared/errors.js';
-import { internalCommentId } from '../shared/identity.js';
-import { validateNormalizedComment } from '../shared/validation.js';
+import { validateObservedComment } from '../shared/validation.js';
 import {
   callProvider,
   noopLogger,
@@ -9,7 +8,7 @@ import {
   type ProviderRetryPolicies,
 } from '../shared/observability.js';
 import { toFailureCode } from '../shared/errors.js';
-import type { Comment, NormalizedComment, Platform, PublishedPost } from '../shared/types.js';
+import type { ObservedComment, Platform, PublishedPost } from '../shared/types.js';
 import type {
   AdaptiveProvider,
   ProviderCapability,
@@ -79,13 +78,13 @@ export class AdaptiveProviderAdapter implements AdaptiveProvider {
       );
     }
     return {
-      items: page.items.map((item) => this.toNormalized(item, query.post, null)),
+      items: page.items.map((item) => this.toObserved(item, query.post, null)),
       nextProviderCursor: page.nextCursor,
       hasMore: page.hasMore,
     };
   }
 
-  public async replyToComment(command: ProviderReplyCommand): Promise<NormalizedComment> {
+  public async replyToComment(command: ProviderReplyCommand): Promise<ObservedComment> {
     const item = await callProvider(
       () =>
         this.client.replyToComment({
@@ -98,7 +97,7 @@ export class AdaptiveProviderAdapter implements AdaptiveProvider {
       this.policies.write,
       (error, delayMs) => this.logRetry('reply_to_comment', error, delayMs),
     );
-    return this.toNormalized(item, command.post, command.parentExternalCommentId);
+    return this.toObserved(item, command.post, command.parentExternalCommentId);
   }
 
   /**
@@ -116,14 +115,17 @@ export class AdaptiveProviderAdapter implements AdaptiveProvider {
     });
   }
 
-  private toNormalized(
+  /**
+   * Maps a provider record onto an observation. It deliberately carries no
+   * identity: persistence assigns that (ADR-0013), so the adapter cannot
+   * invent one and cannot disagree with the constraint that enforces it.
+   */
+  private toObserved(
     item: ExternalCommentRecord,
     post: PublishedPost,
     fallbackParentExternalId: string | null,
-  ): NormalizedComment {
-    const externalParentCommentId = item.parentExternalId ?? fallbackParentExternalId;
-    const comment: Comment = {
-      id: internalCommentId(this.platform, item.externalId),
+  ): ObservedComment {
+    const observed: ObservedComment = {
       postId: post.id,
       platform: this.platform,
       author: {
@@ -132,19 +134,12 @@ export class AdaptiveProviderAdapter implements AdaptiveProvider {
         ...(item.authorProfileUrl === undefined ? {} : { profileUrl: item.authorProfileUrl }),
       },
       body: item.body,
-      parentCommentId:
-        externalParentCommentId === null
-          ? null
-          : internalCommentId(this.platform, externalParentCommentId),
       publishedAt: item.publishedAt,
       updatedAt: item.updatedAt,
-    };
-    const record: NormalizedComment = {
-      comment,
       externalId: item.externalId,
-      externalParentCommentId,
+      externalParentCommentId: item.parentExternalId ?? fallbackParentExternalId,
     };
-    validateNormalizedComment(record);
-    return record;
+    validateObservedComment(observed);
+    return observed;
   }
 }

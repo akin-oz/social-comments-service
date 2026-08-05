@@ -5,7 +5,7 @@ import {
   isPlatform,
   validateComment,
   validateListCommentsQuery,
-  validateNormalizedComment,
+  validateObservedComment,
   validatePagination,
   validateReplyToCommentCommand,
 } from '../../src/shared/validation.js';
@@ -85,10 +85,19 @@ describe('comment domain model', () => {
     ).toThrowError('complete keyset');
   });
 
-  it('requires provider identifiers on a normalized comment', () => {
-    const record = { comment, externalId: 'ig-comment-1', externalParentCommentId: null };
-    expect(() => validateNormalizedComment(record)).not.toThrow();
-    expect(() => validateNormalizedComment({ ...record, externalId: ' ' })).toThrowError(
+  it('requires provider identifiers on an observed comment', () => {
+    const observed = {
+      postId: comment.postId,
+      platform: comment.platform,
+      author: comment.author,
+      body: comment.body,
+      publishedAt: comment.publishedAt,
+      updatedAt: comment.updatedAt,
+      externalId: 'ig-comment-1',
+      externalParentCommentId: null,
+    };
+    expect(() => validateObservedComment(observed)).not.toThrow();
+    expect(() => validateObservedComment({ ...observed, externalId: ' ' })).toThrowError(
       'provider identifiers',
     );
   });

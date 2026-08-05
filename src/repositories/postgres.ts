@@ -1,9 +1,8 @@
-import { internalCommentId } from '../shared/identity.js';
 import { ServiceError } from '../shared/errors.js';
 import type { Database, SqlSession } from './database.js';
 import type {
   Comment,
-  NormalizedComment,
+  ObservedComment,
   Platform,
   ReplyOperation,
   ReplyOperationStatus,
@@ -28,7 +27,7 @@ interface CommentRow {
   author_display_name: string;
   body: string;
   external_comment_id: string;
-  external_parent_comment_id: string | null;
+  parent_comment_id: string | null;
   published_at: string;
   updated_at: string;
 }
@@ -79,11 +78,17 @@ function toOperation(row: OperationRow): ReplyOperation {
 // Platform belongs to the social account, not the post, so every comment query
 // reaches it through that join.
 const commentColumns = `c.id, c.post_id, sa.platform, c.author_external_id, c.author_display_name,
-         c.body, c.external_comment_id, c.external_parent_comment_id, c.published_at, c.updated_at`;
+         c.body, c.external_comment_id, parent.id as parent_comment_id,
+         c.published_at, c.updated_at`;
 
+// The parent is the row holding that provider identifier, resolved by the key
+// that actually identifies it, rather than computed from it (ADR-0013).
 const commentSource = `from comments c
          join posts p on p.id = c.post_id
-         join social_accounts sa on sa.id = p.social_account_id`;
+         join social_accounts sa on sa.id = p.social_account_id
+         left join comments parent
+           on parent.social_account_id = c.social_account_id
+          and parent.external_comment_id = c.external_parent_comment_id`;
 
 const operationColumns = `id, account_id, comment_id, idempotency_key, request_fingerprint, status,
          resulting_comment_id, failure_code, created_at, completed_at`;
@@ -95,12 +100,7 @@ function toComment(row: CommentRow): Comment {
     platform: row.platform,
     author: { id: row.author_external_id, displayName: row.author_display_name },
     body: row.body,
-    // The parent is stored as the provider's identifier; the internal identity
-    // is derived from it rather than stored twice (ADR-0010).
-    parentCommentId:
-      row.external_parent_comment_id === null
-        ? null
-        : internalCommentId(row.platform, row.external_parent_comment_id),
+    parentCommentId: row.parent_comment_id,
     publishedAt: new Date(row.published_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
@@ -211,13 +211,21 @@ export class PostgresCommentRepository implements CommentRepository {
 
   public async upsertMany(
     context: TenantContext,
-    records: readonly NormalizedComment[],
+    observed: readonly ObservedComment[],
   ): Promise<readonly Comment[]> {
-    if (records.length === 0) return [];
+    if (observed.length === 0) return [];
     return this.db.withTenant(context.accountId, async (tx) => {
-      const stored: Comment[] = [];
-      for (const record of records) stored.push(await upsertComment(tx, context, record));
-      return stored;
+      for (const item of observed) await upsertComment(tx, context, item);
+      // Read back after the whole batch is stored, so a reply that arrives
+      // alongside its parent resolves against it, and so the identities are
+      // the ones the database assigned rather than any the caller supplied.
+      const result = await tx.query<CommentRow>(
+        `select ${commentColumns}
+         ${commentSource}
+         where c.account_id = $1 and c.external_comment_id = any($2::text[])`,
+        [context.accountId, observed.map((item) => item.externalId)],
+      );
+      return result.rows.map(toComment);
     });
   }
 }
@@ -225,16 +233,17 @@ export class PostgresCommentRepository implements CommentRepository {
 async function upsertComment(
   tx: SqlSession,
   context: TenantContext,
-  record: NormalizedComment,
-): Promise<Comment> {
-  const { comment } = record;
+  observed: ObservedComment,
+): Promise<void> {
+  // No identity is supplied: the column defaults to gen_random_uuid(), so two
+  // tenants observing the same provider comment get two rows (ADR-0013).
   const result = await tx.query<{ id: string }>(
     `insert into comments
-       (id, account_id, post_id, social_account_id, external_comment_id,
+       (account_id, post_id, social_account_id, external_comment_id,
         external_parent_comment_id, author_external_id, author_display_name,
         body, published_at, updated_at)
-     select $1, $2, p.id, p.social_account_id, $3, $4, $5, $6, $7, $8, $9
-     from posts p where p.id = $10 and p.account_id = $2
+     select $1, p.id, p.social_account_id, $2, $3, $4, $5, $6, $7, $8
+     from posts p where p.id = $9 and p.account_id = $1
      on conflict (social_account_id, external_comment_id) do update set
        body = excluded.body,
        author_display_name = excluded.author_display_name,
@@ -243,22 +252,20 @@ async function upsertComment(
        last_seen_at = now()
      returning id`,
     [
-      comment.id,
       context.accountId,
-      record.externalId,
-      record.externalParentCommentId,
-      comment.author.id,
-      comment.author.displayName,
-      comment.body,
-      comment.publishedAt,
-      comment.updatedAt,
-      comment.postId,
+      observed.externalId,
+      observed.externalParentCommentId,
+      observed.author.id,
+      observed.author.displayName,
+      observed.body,
+      observed.publishedAt,
+      observed.updatedAt,
+      observed.postId,
     ],
   );
   if (!result.rows[0]) {
     throw new ServiceError('POST_NOT_FOUND', 'The comment post was not found.', 404);
   }
-  return comment;
 }
 
 export class PostgresReplyOperationRepository implements ReplyOperationRepository {

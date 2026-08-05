@@ -2,7 +2,7 @@ import { ServiceError } from '../shared/errors.js';
 import type {
   Comment,
   CommentKeyset,
-  NormalizedComment,
+  ObservedComment,
   PublishedPost,
   ReplyOperation,
   TenantContext,
@@ -35,27 +35,32 @@ function compareKeyset(left: CommentKeyset, right: CommentKeyset): number {
   return left.id < right.id ? -1 : 1;
 }
 
+interface StoredComment {
+  id: string;
+  observed: ObservedComment;
+}
+
 export class InMemoryCommentRepository implements CommentRepository {
-  private readonly records = new Map<string, NormalizedComment>();
+  private readonly byId = new Map<string, StoredComment>();
+  /** Provider identity to assigned identity, mirroring the SQL unique constraint. */
+  private readonly byExternalId = new Map<string, string>();
 
   public constructor(
-    seed: readonly NormalizedComment[] = [],
+    seed: readonly ObservedComment[] = [],
     private readonly defaultAccountId = 'account-1',
   ) {
-    for (const record of seed) {
-      this.records.set(scopedKey(defaultAccountId, record.comment.id), record);
-    }
+    for (const observed of seed) this.store(this.defaultAccountId, observed);
   }
 
   public async listByPost(context: TenantContext, query: ListCommentsQuery): Promise<CommentPage> {
-    const ordered = [...this.records.entries()]
+    const ordered = [...this.byId.entries()]
       .filter(
-        ([key, record]) =>
+        ([key, stored]) =>
           key.startsWith(`${context.accountId}:`) &&
-          record.comment.postId === query.postId &&
-          record.comment.platform === query.platform,
+          stored.observed.postId === query.postId &&
+          stored.observed.platform === query.platform,
       )
-      .map(([, record]) => record.comment)
+      .map(([, stored]) => this.toComment(context.accountId, stored))
       .sort((left, right) => compareKeyset(keysetOf(left), keysetOf(right)));
 
     const after = query.after;
@@ -70,24 +75,55 @@ export class InMemoryCommentRepository implements CommentRepository {
   }
 
   public async findById(context: TenantContext, commentId: string): Promise<Comment | null> {
-    return this.records.get(scopedKey(context.accountId, commentId))?.comment ?? null;
+    const stored = this.byId.get(scopedKey(context.accountId, commentId));
+    return stored ? this.toComment(context.accountId, stored) : null;
   }
 
   public async resolveExternalId(
     context: TenantContext,
     commentId: string,
   ): Promise<string | null> {
-    return this.records.get(scopedKey(context.accountId, commentId))?.externalId ?? null;
+    return this.byId.get(scopedKey(context.accountId, commentId))?.observed.externalId ?? null;
   }
 
   public async upsertMany(
     context: TenantContext,
-    records: readonly NormalizedComment[],
+    observed: readonly ObservedComment[],
   ): Promise<readonly Comment[]> {
-    for (const record of records) {
-      this.records.set(scopedKey(context.accountId, record.comment.id), record);
-    }
-    return records.map((record) => record.comment);
+    const stored = observed.map((item) => this.store(context.accountId, item));
+    // Parents resolve after the whole batch is stored, so a reply that arrives
+    // alongside its parent still finds it.
+    return stored.map((item) => this.toComment(context.accountId, item));
+  }
+
+  /** Assigns an identity, or reuses the one this provider comment already has. */
+  private store(accountId: string, observed: ObservedComment): StoredComment {
+    const externalKey = scopedKey(accountId, observed.externalId);
+    const id = this.byExternalId.get(externalKey) ?? crypto.randomUUID();
+    const stored: StoredComment = { id, observed };
+    this.byExternalId.set(externalKey, id);
+    this.byId.set(scopedKey(accountId, id), stored);
+    return stored;
+  }
+
+  private toComment(accountId: string, stored: StoredComment): Comment {
+    const { observed } = stored;
+    const parentExternal = observed.externalParentCommentId;
+    return {
+      id: stored.id,
+      postId: observed.postId,
+      platform: observed.platform,
+      author: observed.author,
+      body: observed.body,
+      // The parent is whatever row holds that provider identifier, not a value
+      // computed from it (ADR-0013).
+      parentCommentId:
+        parentExternal === null
+          ? null
+          : (this.byExternalId.get(scopedKey(accountId, parentExternal)) ?? null),
+      publishedAt: observed.publishedAt,
+      updatedAt: observed.updatedAt,
+    };
   }
 }
 
