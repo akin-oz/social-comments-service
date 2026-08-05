@@ -40,6 +40,12 @@ export interface ReplyToCommentCommand {
 export interface CommentRepository {
   listByPost(context: TenantContext, query: ListCommentsQuery): Promise<CommentPage>;
   findById(context: TenantContext, commentId: string): Promise<Comment | null>;
+  /**
+   * Finds a comment by the provider's identifier for it. Used to reconcile a
+   * reply that was published and stored while the operation recording it was
+   * not completed (Spec-015).
+   */
+  findByExternalId(context: TenantContext, externalId: string): Promise<Comment | null>;
   /** Translates an internal identity back to the provider identifier (ADR-0010). */
   resolveExternalId(context: TenantContext, commentId: string): Promise<string | null>;
   /** Stores observations and returns them with the identities persistence assigned. */
@@ -99,8 +105,29 @@ export interface ReplyOperationRepository {
     context: TenantContext,
     operation: Omit<ReplyOperation, 'accountId'>,
   ): Promise<ReplyOperationClaim>;
+  /**
+   * Records the provider's identifier for a reply that has just been published
+   * but not yet stored. This is the only window in which the reply exists at
+   * the provider and nowhere else, and this write is what makes it recoverable
+   * (Spec-015).
+   */
+  recordPublished(
+    context: TenantContext,
+    operationId: string,
+    externalReplyId: string,
+  ): Promise<ReplyOperation>;
   complete(context: TenantContext, operationId: string, commentId: string): Promise<ReplyOperation>;
   fail(context: TenantContext, operationId: string, failureCode: string): Promise<ReplyOperation>;
+  /**
+   * Resolves an operation whose outcome at the provider cannot be established.
+   * Only a pending operation moves, so a recovering caller can never overwrite
+   * an outcome someone else already established.
+   */
+  markUnknown(
+    context: TenantContext,
+    operationId: string,
+    failureCode: string,
+  ): Promise<ReplyOperation | null>;
 }
 
 /**

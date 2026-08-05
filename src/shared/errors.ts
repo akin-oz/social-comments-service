@@ -4,6 +4,7 @@ export type ServiceErrorCode =
   | 'POST_NOT_FOUND'
   | 'COMMENT_NOT_FOUND'
   | 'IDEMPOTENCY_CONFLICT'
+  | 'REPLY_OUTCOME_UNKNOWN'
   | 'REPLY_DEPTH_EXCEEDED'
   | 'UNSUPPORTED_CAPABILITY'
   | 'PROVIDER_RATE_LIMITED'
@@ -27,6 +28,22 @@ export class ServiceError extends Error {
 export class NotFoundError extends ServiceError {
   public constructor(code: 'POST_NOT_FOUND' | 'COMMENT_NOT_FOUND', message: string) {
     super(code, message, 404);
+  }
+}
+
+/**
+ * The reply may or may not exist at the provider, and this service cannot tell
+ * (Spec-015).
+ *
+ * Deliberately not `IDEMPOTENCY_CONFLICT`: that code invites a retry with a new
+ * key, and here a retry may publish a second reply under a customer's name. It
+ * shares 409 with the other idempotency outcomes because it is one — the key is
+ * terminal — but the action it asks for is different, so the code is different.
+ */
+export class ReplyOutcomeUnknownError extends ServiceError {
+  public constructor(message: string) {
+    super('REPLY_OUTCOME_UNKNOWN', message, 409);
+    this.name = 'ReplyOutcomeUnknownError';
   }
 }
 

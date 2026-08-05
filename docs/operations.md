@@ -14,6 +14,30 @@ Only one migration runner executes database migrations per release. API replicas
 - Rate limits map to `PROVIDER_RATE_LIMITED`; operators should honor provider reset information and avoid retry storms.
 - Provider outages map to `PROVIDER_UNAVAILABLE` or `PROVIDER_ERROR` and should be investigated using request ID and provider metrics.
 
+### Reply operation states
+
+A reply operation is claimed on insert and holds that claim under a **lease of two minutes** — comfortably longer than any request that can still be alive, since the HTTP request timeout is thirty seconds. The lease exists because a claim held forever means a process that dies mid-request poisons its idempotency key permanently (Spec-015).
+
+| State       | Meaning                                                                              | Client action                   | Needs an operator |
+| ----------- | ------------------------------------------------------------------------------------ | ------------------------------- | ----------------- |
+| `pending`   | In flight, and the lease has not expired.                                            | Retry the same key shortly.     | No                |
+| `completed` | The reply was published and stored.                                                  | Nothing; the reply is returned. | No                |
+| `failed`    | The provider refused the request. Nothing was published.                             | Retry with a **new** key.       | No                |
+| `unknown`   | A reply may exist at the provider and this service cannot establish whether it does. | **Do not retry.**               | **Yes**           |
+
+An operation reaches `unknown` three ways: the provider was sent the request and gave no usable answer, the publish succeeded but could not be recorded locally, or the lease expired on an operation whose outcome was never established. In every case the log record names the provider's identifier for the reply that may exist.
+
+One `pending` case self-heals. If the reply was published _and stored_ and only the completion write was lost, the next request for that key reconciles the operation against the stored reply and returns it, without contacting the provider. Recovery is attempted before the lease is consulted, so a live request is never resolved out from under itself.
+
+To find operations needing attention:
+
+```sql
+select id, account_id, comment_id, external_reply_id, failure_code, completed_at
+from reply_operations
+where status = 'unknown'
+   or (status = 'pending' and lease_expires_at < now());
+```
+
 ## Observability
 
 Logs are structured records carrying a stable `event` name in a `noun.verb` namespace (ADR-0011). Alerts and dashboards match on `event`, never on message text, so wording stays editable. Every application and provider record carries `requestId` and `accountId`, so a request can be reconstructed end to end.
@@ -27,15 +51,18 @@ The events worth knowing:
 | `provider.list.completed`         | info  | A provider read finished; carries `fetched` and `durationMs`.      |
 | `comments.reply.published`        | info  | A reply reached the provider and was stored.                       |
 | `comments.reply.replayed`         | info  | An idempotent retry returned the stored reply.                     |
+| `comments.reply.reconciled`       | info  | A pending operation was completed from its stored reply.           |
 | `comments.reply.conflict`         | warn  | An idempotency key was reused while in flight.                     |
 | `comments.reply.failed`           | warn  | A reply failed; carries the taxonomy `code`.                       |
+| `comments.reply.lease_expired`    | warn  | An abandoned claim was resolved to `unknown`.                      |
 | `provider.call.retried`           | warn  | A provider call was retried; carries `code` and `delayMs`.         |
 | `provider.cursor.rejected`        | warn  | A stored continuation was refused; the stream restarted.           |
-| `comments.reply.orphaned`         | error | A reply published but could not be stored; the key stays pending.  |
+| `comments.reply.orphaned`         | error | A reply published but was never stored; the key becomes `unknown`. |
+| `comments.reply.unreconciled`     | error | A reply published and stored, but the completion write failed.     |
 | `http.request.rejected`           | warn  | A request was refused; carries the typed `code`.                   |
 | `http.request.failed`             | error | An unhandled failure. This is the only routine alert-worthy event. |
 
-The ratio of `comments.list.hydrated` to `comments.list.served_from_cache` is the cache hit rate, and a rise in `provider.call.retried` is the earliest warning of provider trouble.
+The ratio of `comments.list.hydrated` to `comments.list.served_from_cache` is the cache hit rate, and a rise in `provider.call.retried` is the earliest warning of provider trouble. `comments.reply.orphaned` is the one record that always warrants a human: a reply exists under a customer's name and this service does not have it.
 
 A rejected client request is logged at warn, never error. Reserving error for failures the service did not anticipate keeps the level meaningful for alerting.
 

@@ -142,23 +142,27 @@ All errors use one stable envelope:
 
 Expected mappings include:
 
-| Status | Code examples                         | Meaning                                          |
-| ------ | ------------------------------------- | ------------------------------------------------ |
-| `400`  | `INVALID_REQUEST`, `INVALID_CURSOR`   | Request cannot be parsed or validated.           |
-| `401`  | `UNAUTHENTICATED`                     | Caller credentials are missing or invalid.       |
-| `404`  | `POST_NOT_FOUND`, `COMMENT_NOT_FOUND` | Resource is not visible in the caller’s scope.   |
-| `409`  | `IDEMPOTENCY_CONFLICT`                | The idempotency key cannot be honoured.          |
-| `422`  | `UNSUPPORTED_CAPABILITY`              | Provider cannot perform the requested operation. |
-| `429`  | `PROVIDER_RATE_LIMITED`               | Provider or service rate limit was reached.      |
-| `502`  | `PROVIDER_ERROR`                      | Provider returned an upstream failure.           |
-| `503`  | `PROVIDER_UNAVAILABLE`                | Provider is temporarily unavailable.             |
-| `500`  | `INTERNAL_ERROR`                      | Unexpected failure inside the service.           |
+| Status | Code examples                                    | Meaning                                                |
+| ------ | ------------------------------------------------ | ------------------------------------------------------ |
+| `400`  | `INVALID_REQUEST`, `INVALID_CURSOR`              | Request cannot be parsed or validated.                 |
+| `401`  | `UNAUTHENTICATED`                                | Caller credentials are missing or invalid.             |
+| `404`  | `POST_NOT_FOUND`, `COMMENT_NOT_FOUND`            | Resource is not visible in the caller’s scope.         |
+| `409`  | `IDEMPOTENCY_CONFLICT`, `REPLY_OUTCOME_UNKNOWN`  | The idempotency key cannot be honoured.                |
+| `422`  | `UNSUPPORTED_CAPABILITY`, `REPLY_DEPTH_EXCEEDED` | Well formed, but cannot be performed on this resource. |
+| `429`  | `PROVIDER_RATE_LIMITED`                          | Provider or service rate limit was reached.            |
+| `502`  | `PROVIDER_ERROR`                                 | Provider returned an upstream failure.                 |
+| `503`  | `PROVIDER_UNAVAILABLE`                           | Provider is temporarily unavailable.                   |
+| `500`  | `INTERNAL_ERROR`                                 | Unexpected failure inside the service.                 |
 
 A `429` response carries `Retry-After` whenever the provider supplied that guidance.
 
 A resource belonging to another tenant is `404`, not `403`: the caller is not told that something exists which they may not see.
 
-`IDEMPOTENCY_CONFLICT` covers three cases, distinguished by the message: the key was reused for a different request body, a reply for the key is still in flight, or the key already failed. A failed key is terminal, because the outcome at the provider may be unknown; the client retries with a new key.
+`IDEMPOTENCY_CONFLICT` covers three cases, distinguished by the message: the key was reused for a different request body, a reply for the key is still in flight, or the key already failed. A failed key is terminal, because the provider refused it; the client retries with a new key.
+
+`REPLY_OUTCOME_UNKNOWN` is deliberately a separate code (Spec-015). It means a reply may have been published and this service cannot establish whether it was — a timeout after send, a claim whose owning process died, or a publish that could not be recorded. The client action differs from every other `409`: **do not retry with a new key**, because retrying may publish a second reply under the customer's name. The service log names the provider's identifier for the reply that may exist, so an operator can check.
+
+`REPLY_DEPTH_EXCEEDED` means the parent named by the request is itself a reply. This service exposes one level of replies as a deliberate normalisation, not because every platform enforces one (ADR-0014).
 
 ## Pagination strategy
 

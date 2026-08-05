@@ -91,7 +91,17 @@ export interface PublishedPost {
   connection: SocialConnection;
 }
 
-export type ReplyOperationStatus = 'pending' | 'completed' | 'failed';
+/**
+ * Where a reply operation ended up (Spec-015).
+ *
+ * `failed` and `unknown` are both terminal for their key and mean different
+ * things. `failed` is a provider refusal: nothing was published, and the client
+ * may retry with a new key. `unknown` is the absence of an answer: a reply may
+ * exist under the customer's name, so retrying could duplicate it and a human
+ * should look. Before the two were separated, `pending` meant both "in flight"
+ * and "nobody knows".
+ */
+export type ReplyOperationStatus = 'pending' | 'completed' | 'failed' | 'unknown';
 
 export interface ReplyOperation {
   id: string;
@@ -102,6 +112,17 @@ export interface ReplyOperation {
   status: ReplyOperationStatus;
   resultingCommentId: string | null;
   failureCode: string | null;
+  /**
+   * When this claim stops being honoured. A claim held forever means a process
+   * that died mid-request poisons its idempotency key permanently.
+   */
+  leaseExpiresAt: string;
+  /**
+   * The provider's identifier for the published reply, recorded between the
+   * publish and the local write. Distinguishes a reply that was stored but not
+   * marked complete — recoverable — from one that vanished between the two.
+   */
+  externalReplyId: string | null;
   createdAt: string;
   completedAt: string | null;
 }

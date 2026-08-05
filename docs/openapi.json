@@ -154,6 +154,7 @@
                   "POST_NOT_FOUND",
                   "COMMENT_NOT_FOUND",
                   "IDEMPOTENCY_CONFLICT",
+                  "REPLY_OUTCOME_UNKNOWN",
                   "REPLY_DEPTH_EXCEEDED",
                   "UNSUPPORTED_CAPABILITY",
                   "PROVIDER_RATE_LIMITED",

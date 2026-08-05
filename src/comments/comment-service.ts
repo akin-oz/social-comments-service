@@ -4,6 +4,7 @@ import {
   NotFoundError,
   ProviderCursorRejectedError,
   ReplyDepthExceededError,
+  ReplyOutcomeUnknownError,
   ServiceError,
   toFailureCode,
 } from '../shared/errors.js';
@@ -52,6 +53,30 @@ const PROVIDER_PAGE_LIMIT = 100;
 
 const DEFAULT_SNAPSHOT_LIFETIME_SECONDS = 300;
 
+/**
+ * How long a claimed idempotency key stays claimed (Spec-015).
+ *
+ * Comfortably longer than any request that can still be alive — the HTTP
+ * request timeout is 30 seconds and the provider call budget is shorter still —
+ * so a lease can only expire after the request holding it has finished or died.
+ * Too short and a takeover races a live request; too long and a crashed process
+ * blocks its key for that long.
+ */
+const REPLY_LEASE_MS = 120_000;
+
+/**
+ * Whether a provider failure proves the reply was never published.
+ *
+ * A rate limit is a refusal: the provider declined to process the request, so
+ * nothing went out and the key can be cleanly failed. A timeout or an upstream
+ * error proves only that no usable answer arrived, which is a different thing
+ * and gets the different state. Treating silence as refusal is what invites a
+ * duplicate publication under a customer's name.
+ */
+function provesRejection(code: string): boolean {
+  return code === 'PROVIDER_RATE_LIMITED';
+}
+
 function snapshotLifetimeMs(): number {
   const configured = Number(process.env.SNAPSHOT_LIFETIME_SECONDS);
   const seconds =
@@ -63,8 +88,11 @@ function snapshotLifetimeMs(): number {
  * Binds an idempotency key to one request without storing the request. The
  * body is user content, and an audit row is the wrong place to keep it
  * (ADR-0011); a digest compares identically.
+ *
+ * Exported because it defines how a key binds to a request, which a test
+ * constructing a realistic claim needs to reproduce rather than guess.
  */
-function requestFingerprint(commentId: string, body: string): string {
+export function requestFingerprint(commentId: string, body: string): string {
   return createHash('sha256').update(`${commentId}:${body}`, 'utf8').digest('hex');
 }
 
@@ -235,6 +263,7 @@ export class CommentService {
     const provider = this.providers.get(comment.platform);
     requireCapability(provider, 'reply_to_comment');
 
+    const now = Date.now();
     const claim = await this.operations.claim(context, {
       id: crypto.randomUUID(),
       commentId,
@@ -243,7 +272,9 @@ export class CommentService {
       status: 'pending',
       resultingCommentId: null,
       failureCode: null,
-      createdAt: new Date().toISOString(),
+      leaseExpiresAt: new Date(now + REPLY_LEASE_MS).toISOString(),
+      externalReplyId: null,
+      createdAt: new Date(now).toISOString(),
       completedAt: null,
     });
     if (!claim.claimed) {
@@ -288,7 +319,13 @@ export class CommentService {
       });
     } catch (error) {
       const failureCode = toFailureCode(error);
-      await this.operations.fail(context, claim.operation.id, failureCode);
+      // A refusal is failed and a silence is unknown. They ask the client for
+      // different things, and before they were the same state (Spec-015).
+      if (provesRejection(failureCode)) {
+        await this.operations.fail(context, claim.operation.id, failureCode);
+      } else {
+        await this.operations.markUnknown(context, claim.operation.id, failureCode);
+      }
       this.metrics.increment('comments.reply.failure', {
         platform: comment.platform,
         code: failureCode,
@@ -309,38 +346,67 @@ export class CommentService {
       throw error;
     }
 
+    // From here the reply exists at the provider. Record where, before doing
+    // anything that can fail: this is the only thing that later distinguishes
+    // "published and stored, completion lost" — which recovers — from
+    // "published and gone", which does not.
+    let stored;
     try {
-      const [stored] = await this.comments.upsertMany(context, [reply]);
+      await this.operations.recordPublished(context, claim.operation.id, reply.externalId);
+      [stored] = await this.comments.upsertMany(context, [reply]);
       if (!stored) {
         throw new ServiceError('INTERNAL_ERROR', 'The published reply could not be stored.', 500);
       }
-      await this.operations.complete(context, claim.operation.id, stored.id);
-      this.metrics.increment('comments.reply.success', { platform: comment.platform });
-      this.logger.info('comments.reply.published', {
-        ...this.trace(context),
-        commentId,
-        replyId: stored.id,
-        platform: comment.platform,
-        // Length rather than content: reply bodies are user data (ADR-0011).
-        bodyLength: body.length,
-        durationMs: Date.now() - startedAt,
-      });
-      return stored;
     } catch (error) {
-      // The reply exists at the provider but could not be recorded. The
-      // operation deliberately stays pending rather than failed: a later
-      // request is told the work is in flight, not invited to repeat it.
+      // Nothing was stored. The outcome is not failed — a reply was published —
+      // and not pending, because no later request can resolve it. It is
+      // unknown, which is the state that says a human should look.
+      await this.operations
+        .markUnknown(context, claim.operation.id, 'REPLY_OUTCOME_UNKNOWN')
+        .catch(() => undefined);
       this.metrics.increment('comments.reply.orphaned', { platform: comment.platform });
       this.logger.error('comments.reply.orphaned', {
         ...this.trace(context),
         commentId,
         platform: comment.platform,
+        // The provider's own identifier, so an operator can find the reply that
+        // exists without having to guess.
         externalReplyId: reply.externalId,
         code: toFailureCode(error),
         durationMs: Date.now() - startedAt,
       });
       throw error;
     }
+
+    try {
+      await this.operations.complete(context, claim.operation.id, stored.id);
+    } catch (error) {
+      // The reply is published and stored; only the record of that is missing.
+      // The operation stays pending on purpose, because the next request for
+      // this key can reconcile it from the stored reply.
+      this.metrics.increment('comments.reply.unreconciled', { platform: comment.platform });
+      this.logger.error('comments.reply.unreconciled', {
+        ...this.trace(context),
+        commentId,
+        platform: comment.platform,
+        replyId: stored.id,
+        code: toFailureCode(error),
+        durationMs: Date.now() - startedAt,
+      });
+      throw error;
+    }
+
+    this.metrics.increment('comments.reply.success', { platform: comment.platform });
+    this.logger.info('comments.reply.published', {
+      ...this.trace(context),
+      commentId,
+      replyId: stored.id,
+      platform: comment.platform,
+      // Length rather than content: reply bodies are user data (ADR-0011).
+      bodyLength: body.length,
+      durationMs: Date.now() - startedAt,
+    });
+    return stored;
   }
 
   /**
@@ -416,9 +482,12 @@ export class CommentService {
   }
 
   /**
-   * Resolves a repeated idempotency key. A key is bound to one request body,
-   * and an operation that already failed is terminal: the outcome at the
-   * provider may be unknown, so replaying it could duplicate a published reply.
+   * Resolves a repeated idempotency key, recovering the operation where it can.
+   *
+   * A key is bound to one request body. A failed key is terminal because the
+   * provider refused it; an unknown key is terminal because nobody knows what
+   * the provider did. Returning null means the key is genuinely in flight and
+   * the caller should be told so.
    */
   private async replay(
     context: RequestContext,
@@ -443,6 +512,58 @@ export class CommentService {
         409,
       );
     }
+    if (operation.status === 'unknown') throw unknownOutcome();
+    if (operation.status === 'pending') return this.recover(context, operation);
     return null;
   }
+
+  /**
+   * Decides what a pending operation actually is.
+   *
+   * Three cases hide behind `pending`. The reply was published and stored and
+   * only the completion was lost, which self-heals here without touching the
+   * provider. The lease has expired, so the process that held it is gone and
+   * the outcome cannot be established — that becomes `unknown` rather than
+   * being retried, because an expired lease does not prove the provider was
+   * never reached. Or the work is genuinely in flight, which is the only case
+   * that returns null.
+   */
+  private async recover(
+    context: RequestContext,
+    operation: ReplyOperation,
+  ): Promise<Comment | null> {
+    if (operation.externalReplyId !== null) {
+      const stored = await this.comments.findByExternalId(context, operation.externalReplyId);
+      if (stored) {
+        await this.operations.complete(context, operation.id, stored.id);
+        this.metrics.increment('comments.reply.reconciled');
+        this.logger.info('comments.reply.reconciled', {
+          ...this.trace(context),
+          commentId: operation.commentId,
+          replyId: stored.id,
+        });
+        return stored;
+      }
+    }
+
+    // Checked only once the reply is known not to be stored: a live request may
+    // be between its publish and its write, and resolving it from underneath
+    // would be worse than making its caller wait.
+    if (Date.parse(operation.leaseExpiresAt) > Date.now()) return null;
+
+    await this.operations.markUnknown(context, operation.id, 'REPLY_OUTCOME_UNKNOWN');
+    this.metrics.increment('comments.reply.lease_expired');
+    this.logger.warn('comments.reply.lease_expired', {
+      ...this.trace(context),
+      commentId: operation.commentId,
+      ...(operation.externalReplyId === null ? {} : { externalReplyId: operation.externalReplyId }),
+    });
+    throw unknownOutcome();
+  }
+}
+
+function unknownOutcome(): ReplyOutcomeUnknownError {
+  return new ReplyOutcomeUnknownError(
+    'The outcome of this reply could not be established; a reply may have been published. Do not retry with a new key.',
+  );
 }

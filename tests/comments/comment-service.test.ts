@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { CommentService } from '../../src/comments/comment-service.js';
+import { CommentService, requestFingerprint } from '../../src/comments/comment-service.js';
 import {
   AdaptiveProviderAdapter,
   type ProviderClient,
@@ -15,6 +15,7 @@ import {
 import {
   ProviderCursorRejectedError,
   ProviderRateLimitError,
+  ProviderUnavailableError,
   ServiceError,
 } from '../../src/shared/errors.js';
 import type { ProviderCapability } from '../../src/comments/contracts.js';
@@ -393,6 +394,9 @@ describe('replying to a comment', () => {
   it('does not record a published reply as failed when storing it breaks', async () => {
     // The provider published. If storage then fails and the operation is marked
     // failed, the client is told to retry with a new key and publishes twice.
+    // It is `unknown` now rather than `pending`: nothing was stored, so no
+    // later request can resolve it, and pending would mean waiting forever
+    // (Spec-015).
     const { service, operations, comments, parentId } = await withCachedComments();
     comments.upsertMany = async () => {
       throw new Error('database unavailable');
@@ -402,7 +406,174 @@ describe('replying to a comment', () => {
 
     const operation = await operations.findByIdempotencyKey(tenant, 'key-1');
     expect(operation?.status).not.toBe('failed');
-    expect(operation?.status).toBe('pending');
+    expect(operation?.status).toBe('unknown');
+  });
+
+  it('names the published reply in the log when it cannot be stored', async () => {
+    // An operator has to be able to find the reply that exists at the provider
+    // and nowhere else. The provider's own identifier is the only handle.
+    const { service, comments, logger, parentId } = await withCachedComments();
+    comments.upsertMany = async () => {
+      throw new Error('database unavailable');
+    };
+
+    await expect(service.replyToComment(tenant, parentId, 'Thank you!', 'key-1')).rejects.toThrow();
+
+    const record = logger.find('comments.reply.orphaned');
+    expect(record?.level).toBe('error');
+    expect(record?.fields.externalReplyId).toEqual(expect.any(String));
+  });
+
+  it('tells a client an unknown outcome is unknown, not merely conflicting', async () => {
+    // IDEMPOTENCY_CONFLICT invites a retry with a new key. Here a retry may
+    // publish a second reply under a customer's name, so the code differs.
+    const { service, comments, parentId } = await withCachedComments();
+    comments.upsertMany = async () => {
+      throw new Error('database unavailable');
+    };
+    await expect(service.replyToComment(tenant, parentId, 'Thank you!', 'key-1')).rejects.toThrow();
+
+    await expect(
+      service.replyToComment(tenant, parentId, 'Thank you!', 'key-1'),
+    ).rejects.toMatchObject({ code: 'REPLY_OUTCOME_UNKNOWN', statusCode: 409 });
+  });
+
+  it('records a timeout after send as unknown rather than failed', async () => {
+    // A timeout proves no answer arrived, not that the provider refused. A rate
+    // limit proves refusal, and stays `failed` — the test above.
+    const { service, operations, parentId } = await withCachedComments({
+      client: {
+        listComments: async () => ({
+          items: [externalComment('ig-comment-1', '2026-08-01T10:00:00.000Z')],
+          nextCursor: null,
+          hasMore: false,
+        }),
+        replyToComment: async () => {
+          throw new ProviderUnavailableError('The provider did not respond in time.');
+        },
+      },
+    });
+
+    await expect(service.replyToComment(tenant, parentId, 'Thank you!', 'key-1')).rejects.toThrow();
+
+    await expect(operations.findByIdempotencyKey(tenant, 'key-1')).resolves.toMatchObject({
+      status: 'unknown',
+      failureCode: 'PROVIDER_UNAVAILABLE',
+    });
+  });
+
+  it('completes an operation left pending with its reply already stored', async () => {
+    // The publish and the local write both succeeded; only the completion was
+    // lost. The reply exists, so the next request for that key reconciles to it
+    // rather than answering 409 forever, and the provider is never contacted.
+    const { service, operations, client, parentId } = await withCachedComments();
+    const complete = operations.complete.bind(operations);
+    operations.complete = async () => {
+      throw new Error('database unavailable');
+    };
+
+    await expect(service.replyToComment(tenant, parentId, 'Thank you!', 'key-1')).rejects.toThrow();
+    const pending = await operations.findByIdempotencyKey(tenant, 'key-1');
+    expect(pending?.status).toBe('pending');
+    expect(pending?.externalReplyId).toEqual(expect.any(String));
+
+    operations.complete = complete;
+    const callsBefore = client.replyCalls;
+    const recovered = await service.replyToComment(tenant, parentId, 'Thank you!', 'key-1');
+
+    expect(recovered.body).toBe('Thank you!');
+    expect(client.replyCalls).toBe(callsBefore);
+    await expect(operations.findByIdempotencyKey(tenant, 'key-1')).resolves.toMatchObject({
+      status: 'completed',
+    });
+  });
+
+  it('answers in-progress while the lease is live, not forever', async () => {
+    const { service, operations, parentId } = await withCachedComments();
+    const claimed = await operations.claim(tenant, {
+      id: crypto.randomUUID(),
+      commentId: parentId,
+      idempotencyKey: 'key-1',
+      requestFingerprint: requestFingerprint(parentId, 'Thank you!'),
+      status: 'pending',
+      resultingCommentId: null,
+      failureCode: null,
+      leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      externalReplyId: null,
+      createdAt: new Date().toISOString(),
+      completedAt: null,
+    });
+    expect(claimed.claimed).toBe(true);
+
+    await expect(
+      service.replyToComment(tenant, parentId, 'Thank you!', 'key-1'),
+    ).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT', statusCode: 409 });
+  });
+
+  it('releases a key whose lease expired, without republishing', async () => {
+    // A process that died mid-request used to hold its key permanently: every
+    // later request was told the work was in flight, until someone ran SQL by
+    // hand. The lease releases it, and the outcome is unknown rather than
+    // retried, because an expired lease does not prove the provider was never
+    // reached.
+    const { service, operations, client, parentId } = await withCachedComments();
+    await operations.claim(tenant, {
+      id: crypto.randomUUID(),
+      commentId: parentId,
+      idempotencyKey: 'key-1',
+      requestFingerprint: requestFingerprint(parentId, 'Thank you!'),
+      status: 'pending',
+      resultingCommentId: null,
+      failureCode: null,
+      leaseExpiresAt: new Date(Date.now() - 1_000).toISOString(),
+      externalReplyId: null,
+      createdAt: new Date(Date.now() - 120_000).toISOString(),
+      completedAt: null,
+    });
+    const callsBefore = client.replyCalls;
+
+    await expect(
+      service.replyToComment(tenant, parentId, 'Thank you!', 'key-1'),
+    ).rejects.toMatchObject({ code: 'REPLY_OUTCOME_UNKNOWN', statusCode: 409 });
+
+    expect(client.replyCalls).toBe(callsBefore);
+    await expect(operations.findByIdempotencyKey(tenant, 'key-1')).resolves.toMatchObject({
+      status: 'unknown',
+    });
+  });
+
+  it('recovers an expired lease from the stored reply before giving up on it', async () => {
+    // An expired lease whose reply is present is recoverable, and recovery must
+    // be tried before the operation is written off as unknown.
+    const { service, operations, comments, parentId } = await withCachedComments();
+    const published = await service.replyToComment(tenant, parentId, 'Thank you!', 'key-1');
+    const stored = await comments.findByExternalId(
+      tenant,
+      (await operations.findByIdempotencyKey(tenant, 'key-1'))!.externalReplyId!,
+    );
+    expect(stored?.id).toBe(published.id);
+
+    // Rewind that operation to the state a crashed process would have left.
+    await operations.claim(tenant, {
+      id: crypto.randomUUID(),
+      commentId: parentId,
+      idempotencyKey: 'key-2',
+      requestFingerprint: requestFingerprint(parentId, 'Thank you!'),
+      status: 'pending',
+      resultingCommentId: null,
+      failureCode: null,
+      leaseExpiresAt: new Date(Date.now() - 1_000).toISOString(),
+      externalReplyId: (await operations.findByIdempotencyKey(tenant, 'key-1'))!.externalReplyId,
+      createdAt: new Date(Date.now() - 120_000).toISOString(),
+      completedAt: null,
+    });
+
+    const recovered = await service.replyToComment(tenant, parentId, 'Thank you!', 'key-2');
+
+    expect(recovered.id).toBe(published.id);
+    await expect(operations.findByIdempotencyKey(tenant, 'key-2')).resolves.toMatchObject({
+      status: 'completed',
+    });
   });
 
   it('refuses to reply to a reply, because the model exposes one level', async () => {

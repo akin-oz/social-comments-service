@@ -107,6 +107,16 @@ export class InMemoryCommentRepository implements CommentRepository {
     return stored ? this.toComment(context.accountId, stored) : null;
   }
 
+  public async findByExternalId(
+    context: TenantContext,
+    externalId: string,
+  ): Promise<Comment | null> {
+    const id = this.byExternalId.get(context.accountId, externalId);
+    if (id === undefined) return null;
+    const stored = this.byId.get(context.accountId, id);
+    return stored ? this.toComment(context.accountId, stored) : null;
+  }
+
   public async resolveExternalId(
     context: TenantContext,
     commentId: string,
@@ -220,6 +230,29 @@ export class InMemoryReplyOperationRepository implements ReplyOperationRepositor
     const id = this.claimedKeys.get(context.accountId, key);
     if (id === undefined) return null;
     return this.operations.get(context.accountId, id) ?? null;
+  }
+
+  public async recordPublished(
+    context: TenantContext,
+    operationId: string,
+    externalReplyId: string,
+  ): Promise<ReplyOperation> {
+    return this.update(context, operationId, { externalReplyId });
+  }
+
+  /** Only a pending operation moves, mirroring the SQL predicate. */
+  public async markUnknown(
+    context: TenantContext,
+    operationId: string,
+    failureCode: string,
+  ): Promise<ReplyOperation | null> {
+    const operation = this.operations.get(context.accountId, operationId);
+    if (operation?.status !== 'pending') return null;
+    return this.update(context, operationId, {
+      status: 'unknown',
+      failureCode,
+      completedAt: new Date().toISOString(),
+    });
   }
 
   public async complete(

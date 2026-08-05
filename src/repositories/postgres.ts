@@ -55,6 +55,8 @@ interface OperationRow {
   status: ReplyOperationStatus;
   resulting_comment_id: string | null;
   failure_code: string | null;
+  lease_expires_at: string;
+  external_reply_id: string | null;
   created_at: string;
   completed_at: string | null;
 }
@@ -74,6 +76,8 @@ function toOperation(row: OperationRow): ReplyOperation {
     status: row.status,
     resultingCommentId: row.resulting_comment_id,
     failureCode: row.failure_code,
+    leaseExpiresAt: new Date(row.lease_expires_at).toISOString(),
+    externalReplyId: row.external_reply_id,
     createdAt: new Date(row.created_at).toISOString(),
     completedAt: row.completed_at === null ? null : new Date(row.completed_at).toISOString(),
   };
@@ -95,7 +99,8 @@ const commentSource = `from comments c
           and parent.external_comment_id = c.external_parent_comment_id`;
 
 const operationColumns = `id, account_id, comment_id, idempotency_key, request_fingerprint, status,
-         resulting_comment_id, failure_code, created_at, completed_at`;
+         resulting_comment_id, failure_code, lease_expires_at, external_reply_id,
+         created_at, completed_at`;
 
 function toComment(row: CommentRow): Comment {
   return {
@@ -218,6 +223,22 @@ export class PostgresCommentRepository implements CommentRepository {
     });
   }
 
+  public async findByExternalId(
+    context: TenantContext,
+    externalId: string,
+  ): Promise<Comment | null> {
+    return this.db.withTenant(context.accountId, async (tx) => {
+      const result = await tx.query<CommentRow>(
+        `select ${commentColumns}
+         ${commentSource}
+         where c.account_id = $1 and c.external_comment_id = $2`,
+        [context.accountId, externalId],
+      );
+      const row = result.rows[0];
+      return row ? toComment(row) : null;
+    });
+  }
+
   public async resolveExternalId(
     context: TenantContext,
     commentId: string,
@@ -322,8 +343,9 @@ export class PostgresReplyOperationRepository implements ReplyOperationRepositor
       const inserted = await tx.query<OperationRow>(
         `insert into reply_operations
            (id, account_id, comment_id, idempotency_key, request_fingerprint, status,
-            resulting_comment_id, failure_code, created_at, completed_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            resulting_comment_id, failure_code, lease_expires_at, external_reply_id,
+            created_at, completed_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          on conflict (account_id, idempotency_key) do nothing
          returning ${operationColumns}`,
         [
@@ -335,6 +357,8 @@ export class PostgresReplyOperationRepository implements ReplyOperationRepositor
           operation.status,
           operation.resultingCommentId,
           operation.failureCode,
+          operation.leaseExpiresAt,
+          operation.externalReplyId,
           operation.createdAt,
           operation.completedAt,
         ],
@@ -352,6 +376,24 @@ export class PostgresReplyOperationRepository implements ReplyOperationRepositor
         throw new ServiceError('INTERNAL_ERROR', 'Reply operation could not be claimed.', 500);
       }
       return { operation: toOperation(current), claimed: false };
+    });
+  }
+
+  public async recordPublished(
+    context: TenantContext,
+    operationId: string,
+    externalReplyId: string,
+  ): Promise<ReplyOperation> {
+    return this.db.withTenant(context.accountId, async (tx) => {
+      const result = await tx.query<OperationRow>(
+        `update reply_operations set external_reply_id = $1
+         where id = $2 and account_id = $3
+         returning ${operationColumns}`,
+        [externalReplyId, operationId, context.accountId],
+      );
+      const row = result.rows[0];
+      if (!row) throw new ServiceError('INTERNAL_ERROR', 'Reply operation was not found.', 500);
+      return toOperation(row);
     });
   }
 
@@ -379,6 +421,28 @@ export class PostgresReplyOperationRepository implements ReplyOperationRepositor
       failureCode,
       new Date().toISOString(),
     ]);
+  }
+
+  /**
+   * Only a pending operation moves. Two callers may recover the same abandoned
+   * operation at once, and neither may overwrite an outcome the other has
+   * already established.
+   */
+  public async markUnknown(
+    context: TenantContext,
+    operationId: string,
+    failureCode: string,
+  ): Promise<ReplyOperation | null> {
+    return this.db.withTenant(context.accountId, async (tx) => {
+      const result = await tx.query<OperationRow>(
+        `update reply_operations set status = 'unknown', failure_code = $1, completed_at = $2
+         where id = $3 and account_id = $4 and status = 'pending'
+         returning ${operationColumns}`,
+        [failureCode, new Date().toISOString(), operationId, context.accountId],
+      );
+      const row = result.rows[0];
+      return row ? toOperation(row) : null;
+    });
   }
 
   private async update(

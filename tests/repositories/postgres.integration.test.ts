@@ -399,6 +399,62 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     }
   });
 
+  it('round-trips the reply-operation lifecycle, including unknown', async () => {
+    // Every column added by migration 007 has to survive the mapper: the
+    // row-cast defect that shipped green was exactly this class of bug.
+    const commentId = storedA[0]!;
+    const key = `lifecycle-${crypto.randomUUID()}`;
+    const lease = new Date(Date.now() + 60_000).toISOString();
+
+    const claim = await operations.claim(contextA, {
+      id: crypto.randomUUID(),
+      commentId,
+      idempotencyKey: key,
+      requestFingerprint: 'fingerprint',
+      status: 'pending',
+      resultingCommentId: null,
+      failureCode: null,
+      leaseExpiresAt: lease,
+      externalReplyId: null,
+      createdAt: new Date().toISOString(),
+      completedAt: null,
+    });
+    expect(claim.operation.leaseExpiresAt).toBe(lease);
+    expect(claim.operation.externalReplyId).toBeNull();
+
+    const published = await operations.recordPublished(contextA, claim.operation.id, 'ig-reply-99');
+    expect(published.externalReplyId).toBe('ig-reply-99');
+    expect(published.status).toBe('pending');
+
+    const unknown = await operations.markUnknown(contextA, claim.operation.id, 'PROVIDER_ERROR');
+    expect(unknown).toMatchObject({ status: 'unknown', failureCode: 'PROVIDER_ERROR' });
+    expect(unknown?.completedAt).toEqual(expect.any(String));
+
+    // Terminal: a second recoverer must not move it again.
+    await expect(
+      operations.markUnknown(contextA, claim.operation.id, 'PROVIDER_ERROR'),
+    ).resolves.toBeNull();
+
+    await expect(operations.findByIdempotencyKey(contextA, key)).resolves.toMatchObject({
+      status: 'unknown',
+      externalReplyId: 'ig-reply-99',
+      leaseExpiresAt: lease,
+    });
+  });
+
+  it('finds a stored comment by the provider identifier recovery uses', async () => {
+    const externalId = `recovery-${crypto.randomUUID()}`;
+    const [stored] = await comments.upsertMany(contextA, [
+      comment(tenantA, externalId, '2026-08-01T15:00:00.000Z'),
+    ]);
+
+    await expect(comments.findByExternalId(contextA, externalId)).resolves.toMatchObject({
+      id: stored!.id,
+    });
+    // Another tenant's provider identifier resolves to nothing here.
+    await expect(comments.findByExternalId(contextB, externalId)).resolves.toBeNull();
+  });
+
   it('refuses to delete a comment a reply operation still records', async () => {
     // The row records something published under a customer's name. Losing it
     // silently to a cascade is worse than an explicit failure (Spec-018).
@@ -414,6 +470,8 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
         idempotencyKey: `delete-guard-${crypto.randomUUID()}`,
         requestFingerprint: 'fingerprint',
         status: 'pending',
+        leaseExpiresAt: '2026-08-01T10:02:00.000Z',
+        externalReplyId: null,
         resultingCommentId: null,
         failureCode: null,
         createdAt: new Date().toISOString(),
@@ -478,6 +536,8 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
       idempotencyKey: `integration-${crypto.randomUUID()}`,
       requestFingerprint: 'fingerprint',
       status: 'pending' as const,
+      leaseExpiresAt: '2026-08-01T10:02:00.000Z',
+      externalReplyId: null,
       resultingCommentId: null,
       failureCode: null,
       createdAt: new Date().toISOString(),
