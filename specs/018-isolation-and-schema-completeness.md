@@ -93,3 +93,9 @@ Approval requires accepting:
 1. A migration that alters an existing role's attributes, which changes the privileges of a role an operator may have created deliberately.
 2. The `ON DELETE` choices in open decisions 1 and 2, which fix deletion semantics that are currently undefined.
 3. Row-level security on `accounts`, adding a policy to a table nothing currently queries.
+
+## Implementation outcome
+
+Acceptance criterion 1 — "running migrations against a database where `comments_app` already exists with `SUPERUSER` leaves it with neither `SUPERUSER` nor `BYPASSRLS`" — holds on a cluster where the migrating role is a superuser, which is the local and CI case. It does **not** hold literally on managed PostgreSQL, and a second delivery-readiness sweep showed why: clearing those attributes requires `SUPERUSER`, which the managed owner role deliberately is not, so the unconditional `alter role` aborted the migration exactly where ADR-0012 says the role separation matters most.
+
+Migration 006 was changed to preserve the _safety property_ the criterion protects while relaxing its _mechanism_: the clear runs when it can and warns when it cannot, and an unconditional assertion — which any role can run, since it only reads `pg_roles` — then refuses to complete the migration if `comments_app` is still elevated. So on every deployment the migration either makes the role ordinary or fails loudly; it never completes with an elevated service role. The role is created without those attributes in the first place (migration 002), so a correctly provisioned managed deployment passes silently. Recorded here rather than silently diverging, in this repository's established practice.

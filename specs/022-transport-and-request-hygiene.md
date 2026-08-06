@@ -93,3 +93,17 @@ Approval requires accepting:
 1. That two failure modes change status code, from `500` to a `4xx`, which is a breaking change for any client branching on `500` — permitted only because the `500` was itself a defect.
 2. The request-identifier decision in open decision 1, which may remove a correlation ability no client is documented as using.
 3. A new error code for unknown routes, and an explicit body limit that will reject a request the service currently accepts.
+
+## Implementation outcome
+
+Recorded rather than left silent, in the practice this repository uses when reality extends an approved document (as ADR-0010, ADR-0012, and Spec-008 do).
+
+The approved scope above named four transport defects. Implementing it, and a second delivery-readiness sweep, surfaced a cluster of the same shape — client input reaching PostgreSQL as a 500 rather than being refused at the edge — that was closed under this spec's theme rather than opened as separate specs, because each is the identical control at a different field:
+
+- **A forged cursor whose position is not the exact ISO instant the service issues.** Guarded in `decodeCursor` and mirrored in the repository. The first attempt used `Date.parse` finiteness, which the sweep showed is far more lenient than `::timestamptz` (`2026`, `2026-02-30T00:00:00.000Z`); the guard is now a strict round-trip against the issued shape.
+- **A reply body carrying a C0 control character.** Rejected at the body schema before the provider is called, so an unstorable body cannot publish-then-orphan.
+- **An unbounded `Idempotency-Key`.** Bounded at 255, so a key cannot overflow the unique index into a 500.
+- **`ENABLE_API_DOCS` parsing.** `false`, `0`, `no`, `off`, and empty all disable, so an off switch with one accepted spelling cannot publish the schema in production.
+- **The documented upper bounds on `limit` and the reply body** were enforced by no behavioural test, only the OpenAPI golden compare; each now has a request asserting the 400.
+
+Each is mutation-checked. The status-code decisions the approval named (413, 400, 404) stand unchanged.

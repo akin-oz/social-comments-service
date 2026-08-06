@@ -235,7 +235,7 @@ The suite was green at 161 tests, both compositions served real HTTP, and tenant
 
 ### Definition of done
 
-Every finding closed with a demonstrated failing mutation, or recorded as a deliberate limitation with its reasoning.
+Every finding closed with a demonstrated failing mutation, or recorded as a deliberate limitation with its reasoning. The board was then re-run against a fresh database; it confirmed the two security HIGHs closed and the new mutations still kill, and surfaced one incomplete fix — the forged-cursor guard used `Date.parse`, which is more lenient than `::timestamptz`, so it was tightened to a strict round-trip against the exact issued instant and verified live — plus spec-scope notes now recorded in Spec-022 and Spec-018.
 
 The last of them, `validateComment` being defined and tested but wired into nothing, is closed by [Spec-025](../specs/025-mapper-output-validation.md): both `toComment` mappers now guard their output, `ReplyOperation` has the validator its mapper never had, and the failure is reported as a service fault rather than a client one. One deliberate limitation remains — `validatePagination`'s call site is an unreachable defensive assertion no test can kill — kept with its reasoning at the call site rather than given a test that would only re-test the validator.
 
