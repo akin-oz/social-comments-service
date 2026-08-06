@@ -1,6 +1,6 @@
 import { ServiceError } from '../shared/errors.js';
 import { assertStoredComment, assertStoredReplyOperation } from '../shared/validation.js';
-import { isUuid } from '../shared/identifiers.js';
+import { isIssuedTimestamp, isUuid } from '../shared/identifiers.js';
 import type { Database, SqlSession } from './database.js';
 import type {
   Comment,
@@ -204,13 +204,15 @@ export class PostgresCommentRepository implements CommentRepository {
   public constructor(private readonly db: Database) {}
 
   public async listByPost(context: TenantContext, query: ListCommentsQuery): Promise<CommentPage> {
-    // A cursor the service issued always holds a UUID and a timestamp; a keyset
-    // holding neither cannot name a row, so the page is empty rather than a
-    // failed cast. Both halves are guarded because both reach a typed cast —
-    // the timestamp half was the one that got missed (Spec-022).
+    // A cursor the service issued always holds a UUID and the exact ISO instant
+    // this service emits; a keyset holding neither cannot name a row, so the
+    // page is empty rather than a failed cast. Both halves reach a typed cast,
+    // and the timestamp is checked against the issued shape rather than
+    // Date.parse, which accepts far more than ::timestamptz does (Spec-022,
+    // second sweep).
     if (
       query.after !== undefined &&
-      (!isUuid(query.after.id) || Number.isNaN(Date.parse(query.after.publishedAt)))
+      (!isUuid(query.after.id) || !isIssuedTimestamp(query.after.publishedAt))
     ) {
       return { items: [], hasMore: false };
     }

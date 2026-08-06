@@ -61,18 +61,39 @@ describe('opaque pagination cursor', () => {
     }
   });
 
-  it('rejects a structurally valid cursor whose position is not a timestamp', () => {
-    // The identifier half was guarded; this half reached ::timestamptz and
-    // surfaced as a 500 with an error-level log any caller could raise at
-    // will (Spec-022).
-    const forged = Buffer.from(
-      JSON.stringify({ a: ['CANARY-ATTACKER-VALUE', '2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b001'] }),
-      'utf8',
-    ).toString('base64url');
+  it('rejects a cursor position that is not the exact ISO instant it issues', () => {
+    // Both halves of the keyset reach a typed cast, so both are guarded. The
+    // timestamp is checked strictly, not with Date.parse: these all parse to a
+    // finite number yet fail ::timestamptz with a 500, and the calendar-invalid
+    // one even passes the shape regex, so the round-trip is what rejects it
+    // (Spec-022, second readiness sweep).
+    const uuid = '2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b001';
+    const positions = [
+      'CANARY-ATTACKER-VALUE',
+      'CANARY-ATTACKER-VALUE 2026',
+      '2026',
+      '2026-8',
+      '1',
+      '2026-02-30T00:00:00.000Z', // shaped like an instant, but no such day
+      '2026-08-01T10:00:00Z', // valid ISO, but not the millisecond form issued
+    ];
+    for (const publishedAt of positions) {
+      const forged = Buffer.from(JSON.stringify({ a: [publishedAt, uuid] }), 'utf8').toString(
+        'base64url',
+      );
+      expect(
+        () => decodeCursor(forged),
+        `position ${JSON.stringify(publishedAt)} must be rejected`,
+      ).toThrowError(expect.objectContaining({ code: 'INVALID_CURSOR', statusCode: 400 }));
+    }
+  });
 
-    expect(() => decodeCursor(forged)).toThrowError(
-      expect.objectContaining({ code: 'INVALID_CURSOR', statusCode: 400 }),
-    );
+  it('accepts the exact ISO instant it issues', () => {
+    const issued = {
+      after: { publishedAt: '2026-08-01T10:00:00.000Z', id: crypto.randomUUID() },
+      partialRun: false,
+    };
+    expect(decodeCursor(encodeCursor(issued))).toEqual(issued);
   });
 
   it('rejects a structurally valid cursor with an incomplete keyset', () => {

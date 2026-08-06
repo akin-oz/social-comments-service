@@ -1148,17 +1148,26 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     for (const id of stored) expect(walked.filter((seen) => seen === id)).toHaveLength(1);
   });
 
-  it('treats a keyset holding a non-timestamp position as absent', async () => {
-    // The mirror of the non-uuid guard below it: this half reached
-    // $4::timestamptz and produced a 500 with an error-level log (Spec-022).
-    await expect(
-      comments.listByPost(contextA, {
-        postId: tenantA.postId,
-        platform: tenantA.platform,
-        limit: 10,
-        after: { publishedAt: 'CANARY-ATTACKER-VALUE', id: crypto.randomUUID() },
-      }),
-    ).resolves.toEqual({ items: [], hasMore: false });
+  it('treats a keyset holding a non-issued timestamp as absent', async () => {
+    // The mirror of the non-uuid guard: this half reaches $4::timestamptz. The
+    // guard is strict, not Date.parse, so a value that parses but is not the
+    // exact issued instant is still absent rather than a failed cast (Spec-022,
+    // second sweep).
+    for (const publishedAt of [
+      'CANARY-ATTACKER-VALUE',
+      '2026',
+      '2026-02-30T00:00:00.000Z',
+      '2026-08-01T10:00:00Z',
+    ]) {
+      await expect(
+        comments.listByPost(contextA, {
+          postId: tenantA.postId,
+          platform: tenantA.platform,
+          limit: 10,
+          after: { publishedAt, id: crypto.randomUUID() },
+        }),
+      ).resolves.toEqual({ items: [], hasMore: false });
+    }
   });
 
   it('scopes the parent join to one connection when a tenant has two', async () => {

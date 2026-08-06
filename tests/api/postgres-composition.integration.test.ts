@@ -196,25 +196,33 @@ describe.skipIf(!enabled)('PostgreSQL composition through the API', () => {
     expect(response.json()).toMatchObject({ error: { code: 'INVALID_CURSOR' } });
   });
 
-  it('rejects a forged cursor whose timestamp half is not a timestamp', async () => {
-    // Reproduced by the security review: a structurally valid cursor with an
-    // arbitrary string where the timestamp belongs reached ::timestamptz and
-    // answered 500 with an error-level log. The contract says a cursor the
-    // service did not issue is INVALID_CURSOR (Spec-022).
-    const forged = Buffer.from(
-      JSON.stringify({ a: ['CANARY-ATTACKER-VALUE', tenantA.accountId] }),
-      'utf8',
-    ).toString('base64url');
+  it('rejects a forged cursor whose timestamp half is not the issued instant', async () => {
+    // Reproduced by the security review across two sweeps: a cursor with a
+    // string where the timestamp belongs reached ::timestamptz and answered 500
+    // with the attacker value in an error-level log. The first fix guarded only
+    // the Date.parse-invalid subset; these variants parse but still fail the
+    // cast, so all must be 400 / INVALID_CURSOR (Spec-022, second sweep).
+    for (const publishedAt of [
+      'CANARY-ATTACKER-VALUE',
+      'CANARY-ATTACKER-VALUE 2026',
+      '2026',
+      '2026-02-30T00:00:00.000Z',
+    ]) {
+      const forged = Buffer.from(
+        JSON.stringify({ a: [publishedAt, tenantA.accountId] }),
+        'utf8',
+      ).toString('base64url');
 
-    const response = await application.inject({
-      method: 'GET',
-      url: `/v2/posts/${tenantA.postId}/comments?cursor=${encodeURIComponent(forged)}`,
-      headers: { 'x-account-id': tenantA.accountId },
-    });
+      const response = await application.inject({
+        method: 'GET',
+        url: `/v2/posts/${tenantA.postId}/comments?cursor=${encodeURIComponent(forged)}`,
+        headers: { 'x-account-id': tenantA.accountId },
+      });
 
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toMatchObject({
-      error: { code: 'INVALID_CURSOR', reason: 'cursor_not_issued_by_service' },
-    });
+      expect(response.statusCode, `position ${JSON.stringify(publishedAt)}`).toBe(400);
+      expect(response.json()).toMatchObject({
+        error: { code: 'INVALID_CURSOR', reason: 'cursor_not_issued_by_service' },
+      });
+    }
   });
 });

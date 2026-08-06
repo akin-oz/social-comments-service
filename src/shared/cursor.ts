@@ -1,4 +1,5 @@
 import { ServiceError } from './errors.js';
+import { isIssuedTimestamp } from './identifiers.js';
 import type { CommentKeyset, PageCursor } from './types.js';
 
 /**
@@ -70,11 +71,12 @@ function isKeysetTuple(value: unknown): value is [string, string] {
     Array.isArray(value) &&
     value.length === 2 &&
     isNonEmptyString(value[0]) &&
-    // Half the keyset reaches a ::timestamptz cast. A non-empty string that is
-    // not a timestamp is not a cursor this service issued, and letting it
-    // through turned into a 500 with an error-level log any caller could raise
-    // at will — the identifier half was guarded, this half was not (Spec-022).
-    Number.isFinite(Date.parse(value[0])) &&
+    // Half the keyset reaches a ::timestamptz cast. Only the exact ISO instant
+    // this service issues is a cursor it issued; Date.parse accepts far more
+    // than the cast does, so the position is checked strictly. Letting a
+    // lenient value through turned into a 500 with an error-level log any
+    // caller could raise at will (Spec-022, second sweep).
+    isIssuedTimestamp(value[0]) &&
     isNonEmptyString(value[1])
   );
 }
