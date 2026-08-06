@@ -63,6 +63,14 @@ The digest is an HMAC rather than a plain hash because `request_fingerprint` sit
 
 **Rotating the secret invalidates every stored fingerprint.** A client replaying an in-flight idempotency key across the rotation is told its request body changed (`idempotency_key_body_mismatch`), which from outside looks like a client bug. The exposure window is minutes long — the length of a reply operation — so rotate during a quiet period rather than carrying a previous key for comparison.
 
+### Malformed stored records
+
+Every comment and every reply operation is checked against the domain model on its way out of a repository (Spec-025). A row that fails produces `INTERNAL_ERROR` with reason `stored_record_invalid`, a `500`, and an error-level record naming `recordKind` and `recordId` — the row's service-owned identifier, never its content.
+
+**This should never fire.** When it does it means a mapper defect or corrupt data, not a bad request, and the log record is the handle for finding the row. The guard exists because this exact class of defect has shipped here before: a reply-operation row was cast rather than mapped, every field read as `undefined`, and every idempotent retry looked like a different request while the suite stayed green.
+
+The cost is deliberate and worth knowing: **one malformed row makes the page containing it unreadable**, and under keyset pagination that blocks the pages after it too, so a single corrupt comment can strand the rest of a post. The alternative — skipping the row and serving a short page — hides the fault behind a response that looks complete, which is the failure mode this service keeps finding in itself.
+
 ## Observability
 
 Logs are structured records carrying a stable `event` name in a `noun.verb` namespace (ADR-0011). Alerts and dashboards match on `event`, never on message text, so wording stays editable. Every application and provider record carries `requestId` and `accountId`, so a request can be reconstructed end to end.

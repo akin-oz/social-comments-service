@@ -718,6 +718,77 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     expect(onInstagram.items).toEqual([]);
   });
 
+  it('refuses to hand back a stored comment the domain model rejects', async () => {
+    // `not null` is not the same as valid: the column accepts an empty body,
+    // and a mapper defect or a bad write would produce exactly this. Without
+    // the guard it serialises as a comment with an empty body (Spec-025).
+    const owner = new Client({ connectionString: ownerUrl });
+    await owner.connect();
+    let brokenId = '';
+    try {
+      const inserted = await owner.query<{ id: string }>(
+        `insert into comments
+           (account_id, post_id, social_account_id, external_comment_id,
+            author_external_id, author_display_name, body, published_at, updated_at)
+         values ($1, $2, $3, $4, 'author', 'Ada Lovelace', '', now(), now())
+         returning id`,
+        [
+          tenantA.accountId,
+          scratchPostId,
+          tenantA.socialAccountId,
+          `invalid-body-${crypto.randomUUID()}`,
+        ],
+      );
+      brokenId = inserted.rows[0]!.id;
+    } finally {
+      await owner.end();
+    }
+
+    await expect(comments.findById(contextA, brokenId)).rejects.toMatchObject({
+      code: 'INTERNAL_ERROR',
+      reason: 'stored_record_invalid',
+      statusCode: 500,
+      recordKind: 'comment',
+      recordId: brokenId,
+    });
+
+    const cleanup = new Client({ connectionString: ownerUrl });
+    await cleanup.connect();
+    await cleanup.query(`delete from comments where id = $1`, [brokenId]);
+    await cleanup.end();
+  });
+
+  it('refuses to hand back a stored reply operation the domain model rejects', async () => {
+    // The mapper that actually shipped broken. A cast rather than a map made
+    // every field undefined, and every idempotent retry looked like a
+    // different request (Spec-025).
+    const key = `invalid-operation-${crypto.randomUUID()}`;
+    const owner = new Client({ connectionString: ownerUrl });
+    await owner.connect();
+    try {
+      await owner.query(
+        `insert into reply_operations
+           (id, account_id, comment_id, idempotency_key, request_fingerprint, status,
+            lease_expires_at)
+         values ($1, $2, $3, $4, '', 'pending', now())`,
+        [crypto.randomUUID(), tenantA.accountId, storedA[0]!, key],
+      );
+    } finally {
+      await owner.end();
+    }
+
+    await expect(operations.findByIdempotencyKey(contextA, key)).rejects.toMatchObject({
+      code: 'INTERNAL_ERROR',
+      reason: 'stored_record_invalid',
+      recordKind: 'reply_operation',
+    });
+
+    const cleanup = new Client({ connectionString: ownerUrl });
+    await cleanup.connect();
+    await cleanup.query(`delete from reply_operations where idempotency_key = $1`, [key]);
+    await cleanup.end();
+  });
+
   it('refuses to delete a comment a reply operation still records', async () => {
     // The row records something published under a customer's name. Losing it
     // silently to a cascade is worse than an explicit failure (Spec-018).

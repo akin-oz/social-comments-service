@@ -109,7 +109,7 @@ Five investigators re-ran the board after the review-board remediation landed. T
 
 ### Still open
 
-- [ ] **`validateComment` is called by nothing in `src/`.** Specified as [Spec-025](../specs/025-mapper-output-validation.md). Wiring it into the two `toComment` mappers turns a mapper defect into a typed failure rather than a malformed response — the defect class that actually shipped here, in the sibling `toOperation` mapper, which still has no validator either. The spec's substance is what the guard does when it fires: throwing blocks a page and, under keyset pagination, everything after it, while `DomainValidationError`'s existing `400` mapping would blame the client for a service fault.
+Nothing. The last item is closed by [Spec-025](../specs/025-mapper-output-validation.md): `validateComment` now guards both `toComment` mappers, `ReplyOperation` has the validator its mapper never had — the one that actually shipped broken — and a malformed stored row is reported as `INTERNAL_ERROR` / `stored_record_invalid` at 500 rather than as the caller's mistake. Removing either guard, or reporting the fault as a client error, turns tests red. `validatePagination`'s unreachable call site is kept with its reasoning recorded at the call site.
 
 ## Raised by the delivery-readiness review
 

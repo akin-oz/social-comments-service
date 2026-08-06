@@ -1,4 +1,5 @@
 import { ServiceError } from '../shared/errors.js';
+import { assertStoredComment, assertStoredReplyOperation } from '../shared/validation.js';
 import type {
   Comment,
   CommentKeyset,
@@ -153,7 +154,10 @@ export class InMemoryCommentRepository implements CommentRepository {
   private toComment(accountId: string, stored: StoredComment): Comment {
     const { observed } = stored;
     const parentExternal = observed.externalParentCommentId;
-    return {
+    // The same choke point as the SQL adapter's mapper (Spec-025). This one is
+    // reachable in the default suite, so the guard is exercised without a
+    // database.
+    return assertStoredComment({
       id: stored.id,
       postId: observed.postId,
       platform: observed.platform,
@@ -165,7 +169,7 @@ export class InMemoryCommentRepository implements CommentRepository {
         parentExternal === null ? null : (this.byExternalId.get(accountId, parentExternal) ?? null),
       publishedAt: observed.publishedAt,
       updatedAt: observed.updatedAt,
-    };
+    });
   }
 }
 
@@ -239,6 +243,7 @@ export class InMemoryReplyOperationRepository implements ReplyOperationRepositor
     const existing = this.byIdempotencyKey(context, operation.idempotencyKey);
     if (existing) return { operation: existing, claimed: false };
     const stored: ReplyOperation = { ...operation, accountId: context.accountId };
+    assertStoredReplyOperation(stored);
     this.claimedKeys.set(context.accountId, operation.idempotencyKey, operation.id);
     this.operations.set(context.accountId, operation.id, stored);
     return { operation: stored, claimed: true };
@@ -247,7 +252,8 @@ export class InMemoryReplyOperationRepository implements ReplyOperationRepositor
   private byIdempotencyKey(context: TenantContext, key: string): ReplyOperation | null {
     const id = this.claimedKeys.get(context.accountId, key);
     if (id === undefined) return null;
-    return this.operations.get(context.accountId, id) ?? null;
+    const operation = this.operations.get(context.accountId, id);
+    return operation === undefined ? null : assertStoredReplyOperation(operation);
   }
 
   public async recordPublished(
@@ -313,6 +319,7 @@ export class InMemoryReplyOperationRepository implements ReplyOperationRepositor
       );
     }
     const updated: ReplyOperation = { ...operation, ...changes };
+    assertStoredReplyOperation(updated);
     this.operations.set(context.accountId, operationId, updated);
     return updated;
   }

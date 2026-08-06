@@ -235,7 +235,9 @@ The suite was green at 161 tests, both compositions served real HTTP, and tenant
 
 ### Definition of done
 
-Every finding closed with a demonstrated failing mutation, or recorded as a deliberate limitation with its reasoning. What remains recorded rather than fixed: `validateComment` is defined and tested but wired into nothing, and `validatePagination`'s call site is an unreachable defensive assertion no test can kill — both stated in [testing.md](testing.md) rather than given tests that would only re-test their validator.
+Every finding closed with a demonstrated failing mutation, or recorded as a deliberate limitation with its reasoning.
+
+The last of them, `validateComment` being defined and tested but wired into nothing, is closed by [Spec-025](../specs/025-mapper-output-validation.md): both `toComment` mappers now guard their output, `ReplyOperation` has the validator its mapper never had, and the failure is reported as a service fault rather than a client one. One deliberate limitation remains — `validatePagination`'s call site is an unreachable defensive assertion no test can kill — kept with its reasoning at the call site rather than given a test that would only re-test the validator.
 
 ## Milestone 11 — Review-board findings
 

@@ -342,6 +342,75 @@ describe('comment REST API', () => {
     await app.close();
   });
 
+  it('reports a malformed stored comment as 500, never as the caller mistake', async () => {
+    // The specific mistake Spec-025 exists to avoid. `validateComment` throws a
+    // DomainValidationError, which this handler maps to a 400 — so wiring the
+    // guard in without a distinct type would have told the caller its request
+    // was invalid while the fault is in this service's data.
+    const records: { level: string; fields: Record<string, unknown> }[] = [];
+    const comments = new InMemoryCommentRepository([], demoAccountId);
+    // A stored observation the domain model does not accept. The in-memory
+    // adapter does not validate on write, so this is the shape a mapper defect
+    // or a corrupt row would produce on read.
+    await comments
+      .upsertMany({ accountId: demoAccountId }, [
+        {
+          postId: demoPost.id,
+          platform: 'instagram',
+          author: { id: 'author-1', displayName: 'Ada Lovelace' },
+          body: '   ',
+          publishedAt: '2026-08-01T10:00:00.000Z',
+          updatedAt: '2026-08-01T10:00:00.000Z',
+          externalId: 'ig-broken-1',
+          externalParentCommentId: null,
+        },
+      ])
+      .catch(() => undefined);
+
+    const app = createApplication({
+      logger: false,
+      posts: new InMemoryPostRepository([demoPost]),
+      comments,
+      providers: new Map([
+        [
+          'instagram' as const,
+          new AdaptiveProviderAdapter(
+            'instagram',
+            {
+              listComments: async () => ({ items: [], nextCursor: null, hasMore: false }),
+              replyToComment: async () => {
+                throw new Error('not used');
+              },
+            },
+            new Set(['list_comments']),
+            providerPolicies({ ...providerRetryPolicy, maxAttempts: 1 }),
+          ),
+        ],
+      ]),
+    });
+    captureLogs(app, records);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/v2/posts/${demoPost.id}/comments`,
+      headers: auth,
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.statusCode).not.toBe(400);
+    expect(response.json()).toMatchObject({
+      error: { code: 'INTERNAL_ERROR', reason: 'stored_record_invalid' },
+    });
+
+    // A service fault is an error-level record, and it names the row without
+    // carrying its content (ADR-0011).
+    const failure = records.find((record) => record.level === 'error');
+    expect(failure).toBeDefined();
+    expect(failure?.fields).toMatchObject({ code: 'INTERNAL_ERROR', recordKind: 'comment' });
+    expect(JSON.stringify(records)).not.toContain('Ada Lovelace');
+    await app.close();
+  });
+
   it('answers an unknown route in the documented envelope', async () => {
     // Fastify's default 404 has its own shape and names the framework.
     const app = createDemoApplication({ logger: false });

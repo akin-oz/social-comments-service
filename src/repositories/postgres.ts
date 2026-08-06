@@ -1,4 +1,5 @@
 import { ServiceError } from '../shared/errors.js';
+import { assertStoredComment, assertStoredReplyOperation } from '../shared/validation.js';
 import { isUuid } from '../shared/identifiers.js';
 import type { Database, SqlSession } from './database.js';
 import type {
@@ -67,7 +68,7 @@ interface OperationRow {
  * idempotent retry look like a different request.
  */
 function toOperation(row: OperationRow): ReplyOperation {
-  return {
+  return assertStoredReplyOperation({
     id: row.id,
     accountId: row.account_id,
     commentId: row.comment_id,
@@ -80,7 +81,7 @@ function toOperation(row: OperationRow): ReplyOperation {
     externalReplyId: row.external_reply_id,
     createdAt: new Date(row.created_at).toISOString(),
     completedAt: row.completed_at === null ? null : new Date(row.completed_at).toISOString(),
-  };
+  });
 }
 
 // Platform belongs to the social account, not the post, so every comment query
@@ -103,7 +104,10 @@ const operationColumns = `id, account_id, comment_id, idempotency_key, request_f
          created_at, completed_at`;
 
 function toComment(row: CommentRow): Comment {
-  return {
+  // Every comment this adapter returns passes through here, whichever query
+  // produced it, which is why the guard belongs at the mapper rather than at
+  // each call site (Spec-025).
+  return assertStoredComment({
     id: row.id,
     postId: row.post_id,
     platform: row.platform,
@@ -112,7 +116,7 @@ function toComment(row: CommentRow): Comment {
     parentCommentId: row.parent_comment_id,
     publishedAt: new Date(row.published_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
-  };
+  });
 }
 
 export class PostgresPostRepository implements PostRepository {

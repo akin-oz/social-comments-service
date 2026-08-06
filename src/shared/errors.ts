@@ -60,6 +60,10 @@ export const serviceErrorReasons = [
   'request_body_malformed',
   'route_not_found',
   'reply_not_stored',
+  // A row this service stored does not satisfy the domain model it was stored
+  // as. Always a fault here — a mapper defect or corrupt data — never the
+  // caller's, whatever request happened to surface it (Spec-025).
+  'stored_record_invalid',
   'internal_error',
 ] as const;
 
@@ -96,6 +100,35 @@ export class ReplyOutcomeUnknownError extends ServiceError {
   public constructor(message: string) {
     super('REPLY_OUTCOME_UNKNOWN', 'reply_outcome_unknown', message, 409);
     this.name = 'ReplyOutcomeUnknownError';
+  }
+}
+
+/**
+ * A stored row failed the domain model on its way out of a repository.
+ *
+ * Deliberately not `DomainValidationError`, which the route handler maps to
+ * `INVALID_REQUEST` and a 400. That mapping is right for the query, the reply
+ * command, and the provider observation — each validates something a client or
+ * provider supplied. A malformed stored row is none of those, and reporting it
+ * as a client error would tell the caller to fix a request that was fine while
+ * burying a real defect at warn level (Spec-025).
+ *
+ * `recordId` is carried so the log can name the row without putting user
+ * content anywhere near it.
+ */
+export class StoredRecordInvalidError extends ServiceError {
+  public constructor(
+    public readonly recordKind: 'comment' | 'reply_operation',
+    public readonly recordId: string | null,
+    detail: string,
+  ) {
+    super(
+      'INTERNAL_ERROR',
+      'stored_record_invalid',
+      `A stored ${recordKind} does not satisfy the domain model: ${detail}`,
+      500,
+    );
+    this.name = 'StoredRecordInvalidError';
   }
 }
 

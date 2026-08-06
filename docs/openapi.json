@@ -235,6 +235,7 @@
                   "request_body_malformed",
                   "route_not_found",
                   "reply_not_stored",
+                  "stored_record_invalid",
                   "internal_error"
                 ],
                 "description": "Which situation behind the code this is, and therefore what to do next. Reasons are globally unique. A client must tolerate a reason it does not know: new members may be added within /v2."

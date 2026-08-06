@@ -191,7 +191,7 @@ CI runs `pnpm ai:validate` alongside typecheck, lint, formatting, and tests, so 
 
 ## Status
 
-All twenty-four approved specifications and fourteen ADRs are implemented. Retrieving comments for a published post and replying to a comment both work end to end, on PostgreSQL and on in-memory adapters, demonstrable with the commands above.
+All twenty-five approved specifications and fourteen ADRs are implemented. Retrieving comments for a published post and replying to a comment both work end to end, on PostgreSQL and on in-memory adapters, demonstrable with the commands above.
 
 The PostgreSQL adapter is exercised against a real database. Tenant isolation is proven by a test that removes the repository's own `account_id` predicate and confirms another tenant's rows stay invisible across all five tenant-scoped tables, by a second test that reads `pg_roles` to confirm the service role holds neither `SUPERUSER` nor `BYPASSRLS`, and by a third that deliberately drifts that role and asserts the migration corrects it. CI runs the suite against a PostgreSQL service container.
 

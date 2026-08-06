@@ -4,6 +4,7 @@ import { DomainValidationError } from '../shared/validation.js';
 import {
   ProviderRateLimitError,
   ServiceError,
+  StoredRecordInvalidError,
   type ServiceErrorCode,
   type ServiceErrorReason,
 } from '../shared/errors.js';
@@ -237,7 +238,16 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
     }
     if (error instanceof ServiceError) {
       applyRetryAfter(reply, error);
-      logRejection(request, error.code, error.statusCode);
+      logRejection(
+        request,
+        error.code,
+        error.statusCode,
+        // A stored-record fault names the row so an operator can find it. The
+        // identifier is service-owned and carries no user content (Spec-025).
+        error instanceof StoredRecordInvalidError
+          ? { recordKind: error.recordKind, recordId: error.recordId }
+          : undefined,
+      );
       return reply
         .code(error.statusCode)
         .send(errorResponse(error.code, error.reason, error.message, request.id));
@@ -339,8 +349,13 @@ function transportFailure(error: unknown): {
  * are logged at warn and above only when the service itself is at fault
  * (ADR-0011).
  */
-function logRejection(request: FastifyRequest, code: string, statusCode: number): void {
-  const fields = { event: 'http.request.rejected', code, statusCode };
+function logRejection(
+  request: FastifyRequest,
+  code: string,
+  statusCode: number,
+  extra?: Readonly<Record<string, unknown>>,
+): void {
+  const fields = { event: 'http.request.rejected', code, statusCode, ...extra };
   if (statusCode >= 500) request.log.error(fields, 'request failed');
   else request.log.warn(fields, 'request rejected');
 }

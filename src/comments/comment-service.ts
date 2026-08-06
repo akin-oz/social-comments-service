@@ -265,6 +265,14 @@ export class CommentService {
             })
           : null,
       };
+      // A defensive assertion no test can kill, deliberately kept (Spec-025).
+      // `hasMore` and `nextCursor` are built from one expression above, so the
+      // service cannot currently produce the inconsistent pair this rejects —
+      // which means removing it breaks nothing and no test can prove
+      // otherwise. It stays because the pair is easy to separate in a later
+      // edit, and because a client that receives `hasMore: true` with a null
+      // cursor ends its run silently. Recorded here rather than left as an
+      // unexplained line, and noted in docs/testing.md.
       validatePagination(pagination);
 
       const durationMs = Date.now() - startedAt;

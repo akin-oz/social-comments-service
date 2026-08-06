@@ -46,11 +46,19 @@ The integration suites skip without a database so the default run needs no Docke
 
 Some behaviour can only be observed against PostgreSQL: row-level security, the compare-and-set on snapshot state, the upsert's conflict clause, and every deletion rule. An in-memory version of those tests would pass for the wrong reason.
 
-## Two guards a test cannot kill, and why they stay
+## One guard a test cannot kill, and why it stays
 
-`validatePagination` is called just before a list response is built. Removing the call kills no test, and no test can be written that kills it: the service constructs `hasMore` and `nextCursor` together from one expression, so it cannot produce the inconsistent pair the validator exists to reject. It is a defensive assertion against a future edit, not a reachable branch, and it is recorded here rather than deleted or given a test that only re-tests the validator in isolation.
+`validatePagination` is called just before a list response is built. Removing the call kills no test, and no test can be written that kills it: the service constructs `hasMore` and `nextCursor` from one expression, so it cannot produce the inconsistent pair the validator rejects. It is a defensive assertion against a future edit that separates them, not a reachable branch. It stays, with that reasoning at the call site rather than as an unexplained line — which was the disposition [Spec-025](../specs/025-mapper-output-validation.md) settled.
 
-`validateComment` is called by nothing in `src/`. It is the executable statement of what a valid `Comment` is, exercised by `tests/comments/domain-model.test.ts`, and that is the whole of its current job. Wiring it into the repositories would turn a mapper defect into a typed failure rather than a malformed response, which is [Spec-025](../specs/025-mapper-output-validation.md) — and the reason it is a spec rather than a patch is that the naive wiring would report a service-side data fault as a `400`, blaming the client.
+`validateComment` used to sit here too, defined and tested and called by nothing. Spec-025 wired it into both `toComment` mappers, gave `ReplyOperation` the validator it never had, and made the failure a service fault rather than a client one — see below.
+
+## Reporting a fault as the right party's fault
+
+Wiring a domain validator into a repository is a few lines. The part worth remembering is what nearly went wrong.
+
+`validateComment` throws `DomainValidationError`, and the route handler maps that to `INVALID_REQUEST` with a `400`. That mapping is correct for its other callers — the list query, the reply command, the provider observation — because each validates something a client or a provider supplied. A malformed **stored row** is none of those. Throwing the same type from a repository would have told the caller its request was invalid while the fault lay in this service's data, and logged it at warn, hiding a real defect behind a client error.
+
+So the repositories throw `StoredRecordInvalidError`: `INTERNAL_ERROR`, reason `stored_record_invalid`, status 500, logged at error, carrying the row's identifier and none of its content. A test asserts the status is 500 and specifically _not_ 400, because that is the mistake the design exists to avoid.
 
 ## Assertions to avoid
 

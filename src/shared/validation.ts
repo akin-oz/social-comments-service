@@ -1,3 +1,4 @@
+import { StoredRecordInvalidError } from './errors.js';
 import type {
   Comment,
   CommentKeyset,
@@ -5,6 +6,8 @@ import type {
   ObservedComment,
   Pagination,
   Platform,
+  ReplyOperation,
+  ReplyOperationStatus,
 } from './types.js';
 import type { ListCommentsQuery, ReplyToCommentCommand } from '../comments/contracts.js';
 
@@ -12,7 +15,8 @@ export type DomainValidationCode =
   | 'INVALID_COMMENT'
   | 'INVALID_LIST_COMMENTS_QUERY'
   | 'INVALID_PAGINATION'
-  | 'INVALID_REPLY_COMMAND';
+  | 'INVALID_REPLY_COMMAND'
+  | 'INVALID_REPLY_OPERATION';
 
 export class DomainValidationError extends Error {
   public constructor(
@@ -64,6 +68,83 @@ export function validateObservedComment(observed: ObservedComment): void {
       'An observed comment requires a post, supported platform, author, body, timestamps, and the provider identifiers used for deduplication.',
     );
   }
+}
+
+const replyOperationStatuses: readonly ReplyOperationStatus[] = [
+  'pending',
+  'completed',
+  'failed',
+  'unknown',
+];
+
+/**
+ * What a reply operation must look like to be usable.
+ *
+ * Written for the mapper that actually shipped broken: `toOperation` cast a
+ * snake_case row to this type, so every field read as `undefined`, every
+ * idempotent retry looked like a different request, and nothing noticed
+ * (Spec-025).
+ */
+export function validateReplyOperation(operation: ReplyOperation): void {
+  if (
+    !isNonEmptyString(operation.id) ||
+    !isNonEmptyString(operation.accountId) ||
+    !isNonEmptyString(operation.commentId) ||
+    !isNonEmptyString(operation.idempotencyKey) ||
+    !isNonEmptyString(operation.requestFingerprint) ||
+    !replyOperationStatuses.includes(operation.status) ||
+    !isNullableNonEmptyString(operation.resultingCommentId) ||
+    !isNullableNonEmptyString(operation.failureCode) ||
+    !isNonEmptyString(operation.leaseExpiresAt) ||
+    !isNullableNonEmptyString(operation.externalReplyId) ||
+    !isNonEmptyString(operation.createdAt) ||
+    !isNullableNonEmptyString(operation.completedAt)
+  ) {
+    throw new DomainValidationError(
+      'INVALID_REPLY_OPERATION',
+      'A reply operation requires identity, tenancy, a comment, a key, a fingerprint, a known status, a lease, and a creation timestamp.',
+    );
+  }
+}
+
+/**
+ * Checks a comment on its way out of a repository, and reports a failure as
+ * this service's fault rather than the caller's.
+ *
+ * The translation is the point. `validateComment` throws a
+ * `DomainValidationError`, which the route handler maps to a 400 — correct for
+ * its other callers, all of which validate something supplied from outside,
+ * and wrong here (Spec-025).
+ */
+export function assertStoredComment(comment: Comment): Comment {
+  try {
+    validateComment(comment);
+  } catch (error) {
+    throw asStoredRecordFault('comment', comment.id, error);
+  }
+  return comment;
+}
+
+/** The reply-operation twin of {@link assertStoredComment}. */
+export function assertStoredReplyOperation(operation: ReplyOperation): ReplyOperation {
+  try {
+    validateReplyOperation(operation);
+  } catch (error) {
+    throw asStoredRecordFault('reply_operation', operation.id, error);
+  }
+  return operation;
+}
+
+function asStoredRecordFault(
+  kind: 'comment' | 'reply_operation',
+  id: unknown,
+  error: unknown,
+): StoredRecordInvalidError {
+  return new StoredRecordInvalidError(
+    kind,
+    typeof id === 'string' && id.trim() !== '' ? id : null,
+    error instanceof DomainValidationError ? error.code : 'unknown',
+  );
 }
 
 export function validatePagination(pagination: Pagination): void {

@@ -1,8 +1,8 @@
 ---
 spec: 025
 title: Make the domain validator guard the mappers it was written for
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: platform and persistence
 depends_on:
   - Spec-005

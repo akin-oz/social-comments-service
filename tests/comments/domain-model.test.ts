@@ -9,7 +9,24 @@ import {
   validatePagination,
   validateReplyToCommentCommand,
 } from '../../src/shared/validation.js';
-import type { Comment } from '../../src/shared/types.js';
+import { assertStoredComment, assertStoredReplyOperation } from '../../src/shared/validation.js';
+import { StoredRecordInvalidError } from '../../src/shared/errors.js';
+import type { Comment, ReplyOperation } from '../../src/shared/types.js';
+
+const operation: ReplyOperation = {
+  id: 'operation_123',
+  accountId: 'account_123',
+  commentId: 'comment_123',
+  idempotencyKey: 'request-1',
+  requestFingerprint: 'fingerprint',
+  status: 'pending',
+  resultingCommentId: null,
+  failureCode: null,
+  leaseExpiresAt: '2026-08-01T10:02:00.000Z',
+  externalReplyId: null,
+  createdAt: '2026-08-01T10:00:00.000Z',
+  completedAt: null,
+};
 
 const comment: Comment = {
   id: 'comment_123',
@@ -119,3 +136,70 @@ describe('comment domain model', () => {
     ).toThrowError('idempotency key');
   });
 });
+
+describe('stored records are checked on their way out of a repository', () => {
+  // The translation is the point. `validateComment` throws a
+  // DomainValidationError, which the route handler maps to a 400 — right for
+  // its other callers, all of which validate something supplied from outside,
+  // and wrong for a row this service stored (Spec-025).
+
+  it('reports a malformed stored comment as this service fault, not the caller', () => {
+    const raised = catchError(() => assertStoredComment({ ...comment, body: '  ' }));
+
+    expect(raised).toBeInstanceOf(StoredRecordInvalidError);
+    expect(raised).toMatchObject({
+      code: 'INTERNAL_ERROR',
+      reason: 'stored_record_invalid',
+      statusCode: 500,
+      recordKind: 'comment',
+      recordId: comment.id,
+    });
+    expect(raised).not.toBeInstanceOf(DomainValidationError);
+  });
+
+  it('catches the historical row-cast defect, where every field reads undefined', () => {
+    // `toOperation` cast a snake_case row to a camelCase type. Every field was
+    // undefined, every idempotent retry looked like a different request, and
+    // the suite stayed green through the whole milestone.
+    const cast = {} as ReplyOperation;
+
+    const raised = catchError(() => assertStoredReplyOperation(cast));
+
+    expect(raised).toBeInstanceOf(StoredRecordInvalidError);
+    expect(raised).toMatchObject({ recordKind: 'reply_operation', recordId: null });
+  });
+
+  it('names the record without carrying its content', () => {
+    // The row exists so user content is not stored beside it (ADR-0011); the
+    // fault that reports on the row must not undo that.
+    const raised = catchError(() =>
+      assertStoredComment({ ...comment, publishedAt: '', body: 'a private reply' }),
+    );
+
+    expect((raised as Error).message).not.toContain('a private reply');
+    expect((raised as Error).message).not.toContain('Ada Lovelace');
+    expect((raised as StoredRecordInvalidError).recordId).toBe(comment.id);
+  });
+
+  it('passes a well-formed record straight through', () => {
+    expect(assertStoredComment(comment)).toBe(comment);
+    expect(assertStoredReplyOperation(operation)).toBe(operation);
+  });
+
+  it('rejects a reply operation whose status is not one this service knows', () => {
+    const raised = catchError(() =>
+      assertStoredReplyOperation({ ...operation, status: 'in-flight' as never }),
+    );
+
+    expect(raised).toBeInstanceOf(StoredRecordInvalidError);
+  });
+});
+
+function catchError(run: () => unknown): unknown {
+  try {
+    run();
+    return null;
+  } catch (error) {
+    return error;
+  }
+}
