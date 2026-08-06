@@ -3,7 +3,8 @@ import { existsSync } from 'node:fs';
 import { chmod, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-execFileSync('pnpm', ['exec', 'ai', 'sync'], { stdio: 'inherit' });
+// `aie`, not `ai`: the short alias is deprecated in 0.2.0 and removed in 0.3.0.
+execFileSync('pnpm', ['exec', 'aie', 'sync'], { stdio: 'inherit' });
 
 const generatedBanner = (runtime) => `<!--
 
@@ -78,19 +79,15 @@ async function renderRootInstructions(runtime) {
 }
 
 async function generateRuntimeParityArtifacts() {
+  // CLAUDE.md is re-rendered over the compiler's output; see the note on
+  // renderRootInstructions for why the agents are a table rather than inlined.
+  // AGENTS.md is left exactly as the compiler wrote it — since 0.2.0 the codex
+  // adapter writes it at the repository root directly, where 0.1.x wrote it to
+  // .codex/AGENTS.md and this script copied it up.
   await writeFile('CLAUDE.md', await renderRootInstructions('Claude'), 'utf8');
-  await cp('.codex/AGENTS.md', 'AGENTS.md');
 
-  await rm('.codex/hooks', { recursive: true, force: true });
-  await mkdir('.codex/hooks', { recursive: true });
-  const hookNames = (await readdir('.ai/hooks')).filter((name) => name.endsWith('.sh')).sort();
-  await Promise.all(
-    hookNames.map(async (name) => {
-      const destination = path.join('.codex/hooks', name);
-      await cp(path.join('.ai/hooks', name), destination);
-      await chmod(destination, 0o755);
-    }),
-  );
+  await copyHooks('.codex/hooks');
+  await copyHooks('.claude/hooks');
   await writeFile(
     '.codex/README.md',
     `${generatedBanner('codex')}# Generated Codex artifacts\n\nHooks are copied from .ai/hooks/. Runtime hook activation depends on the Codex host supporting the corresponding hook configuration.\n`,
@@ -98,6 +95,35 @@ async function generateRuntimeParityArtifacts() {
   );
   await cp('.ai/templates/claude-settings.json', '.claude/settings.json');
   await copyAgentTeams();
+}
+
+/**
+ * Copies the hook scripts to a runtime directory.
+ *
+ * `.claude/hooks` used to be the compiler's, but 0.2.0 only emits hooks that
+ * are declared in the manifest, and its hook model has four events —
+ * pre-edit, post-edit, session-start, session-end. Two of this repository's
+ * six hooks cannot be expressed in it: the commit guard is a pre-tool-use hook
+ * matching Bash, and the verification hook runs on Stop. Declaring the other
+ * four and hand-maintaining the rest would leave the set half-generated.
+ *
+ * So the scripts are copied here, exactly as `.codex/hooks` already was, and
+ * `.ai/templates/claude-settings.json` stays the single place the wiring is
+ * described. Without this the upgrade silently froze `.claude/hooks`: editing
+ * a source hook would no longer reach the compiled one, and because sync no
+ * longer writes those paths the CI drift check could not see it either.
+ */
+async function copyHooks(destinationDirectory) {
+  await rm(destinationDirectory, { recursive: true, force: true });
+  await mkdir(destinationDirectory, { recursive: true });
+  const names = (await readdir('.ai/hooks')).filter((name) => name.endsWith('.sh')).sort();
+  await Promise.all(
+    names.map(async (name) => {
+      const destination = path.join(destinationDirectory, name);
+      await cp(path.join('.ai/hooks', name), destination);
+      await chmod(destination, 0o755);
+    }),
+  );
 }
 
 /**
@@ -124,7 +150,6 @@ execFileSync(
     '--write',
     'CLAUDE.md',
     'AGENTS.md',
-    '.codex/AGENTS.md',
     '.codex/README.md',
     '.claude/settings.json',
   ],

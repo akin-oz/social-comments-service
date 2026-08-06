@@ -22,8 +22,8 @@ importers:
         version: 8.22.0
     devDependencies:
       '@akinlabs/ai-engineering':
-        specifier: github:akin-oz/ai-engineering#v0.1.2
-        version: https://codeload.github.com/akin-oz/ai-engineering/tar.gz/a48337b796d57a82ff13d6a0eeda54d6932b8ddf
+        specifier: 0.2.0
+        version: 0.2.0
       '@eslint/js':
         specifier: ^9.39.5
         version: 9.39.5
@@ -60,9 +60,8 @@ importers:
 
 packages:
 
-  '@akinlabs/ai-engineering@https://codeload.github.com/akin-oz/ai-engineering/tar.gz/a48337b796d57a82ff13d6a0eeda54d6932b8ddf':
-    resolution: {gitHosted: true, integrity: sha512-XFgqRxsjQLd2U1i+H4dIX8rxLGQybHHm9l3TIjBgQZ2M0aCNjO80ylqV3FJWklLokLJgV9X0ui9hFiEUyPMlBw==, tarball: https://codeload.github.com/akin-oz/ai-engineering/tar.gz/a48337b796d57a82ff13d6a0eeda54d6932b8ddf}
-    version: 0.1.2
+  '@akinlabs/ai-engineering@0.2.0':
+    resolution: {integrity: sha512-ucDiTxfPSzPs1GwnGliil2pcZGPqO7/3RFlEkl8ZEY+PucEisQkFD1p9MjVOS6QlZ29SI/kBRfeSXUgQzbo2og==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -1486,7 +1485,7 @@ packages:
 
 snapshots:
 
-  '@akinlabs/ai-engineering@https://codeload.github.com/akin-oz/ai-engineering/tar.gz/a48337b796d57a82ff13d6a0eeda54d6932b8ddf':
+  '@akinlabs/ai-engineering@0.2.0':
     dependencies:
       yaml: 2.9.0
 

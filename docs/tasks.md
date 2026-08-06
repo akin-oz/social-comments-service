@@ -141,7 +141,7 @@ The review's method is worth stating: it re-applied real historical defects and 
 - [x] The README now says the list request must run first, because a reply resolves against the stored snapshot.
 - [x] `request_fingerprint` stored the reply body in plain text; it is now a SHA-256 digest, verified by a test asserting the body is absent from the audit trail.
 - [x] `src/api/schemas.ts` no longer contradicts itself on provider identifiers: the author identifier is documented as the one provider-issued value the contract exposes.
-- [ ] `@akinlabs/ai-engineering` is pinned to a mutable git tag, so a clean install is not reproducible across time.
+- [x] `@akinlabs/ai-engineering` was pinned to a mutable git tag. It is now pinned to `0.2.0` from the npm registry, which is immutable and carries an integrity hash, so a clean install resolves the same bytes whenever it runs. That also removed the `codeload.github.com` reachability requirement. The upgrade was not free: 0.2.0 tracks artefact ownership, so the workspace state under `.ai/state/` has to be committed or a fresh clone's first sync refuses; it stopped emitting `.claude/hooks`, which the sync script now copies itself; and `.claude/rules/*.md` are gone, their content still inlined in `CLAUDE.md`.
 
 ## Raised by the principal-review board
 

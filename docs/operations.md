@@ -111,11 +111,20 @@ Logs never contain comment bodies, author display names, credentials, or provide
 
 ## Install and supply chain
 
-`pnpm install` fetches `@akinlabs/ai-engineering` from a pinned GitHub tarball, so an install needs reachability to `codeload.github.com` as well as to the npm registry. Behind a proxy that allowlists only the registry, the install fails on that one dependency; it is a development tool and is absent from the `--prod` runtime image.
+Every dependency resolves from the npm registry. `@akinlabs/ai-engineering` used to come from a pinned GitHub tarball, which meant an install also needed reachability to `codeload.github.com` and resolved a mutable tag; it is now `0.2.0` from the registry, immutable and integrity-checked. A proxy that allowlists the registry alone is sufficient.
 
 The current advisory set is five findings, all in the `vitest`/`vite`/`esbuild` development chain and none present in the production image. They are recorded rather than bumped, because bumping a test runner on the eve of a submission trades a real regression risk for a theoretical one that does not reach the deployed artefact.
 
 `pnpm migrate` sets the service role's password with `alter role … password`. DDL cannot take a bound parameter, so the value is escaped as a literal rather than interpolated raw — but a server configured with `log_statement = ddl` or `all` will write that statement, and therefore the password, to the PostgreSQL log. Either leave `log_statement` at its default of `none` while migrating, or set a pre-computed SCRAM verifier instead of a plaintext password.
+
+### Regenerating the assistant artefacts
+
+`pnpm ai:sync` compiles `.ai/` into `CLAUDE.md`, `AGENTS.md`, `.claude/`, and `.codex/`, and CI fails if the result differs from what is committed.
+
+Two things about it are worth knowing before editing `.ai/`:
+
+- **`.ai/state/` is committed on purpose.** Since 0.2.0 the compiler records which files it owns and refuses to overwrite anything it does not. Without that state in the repository, the first `pnpm ai:sync` after a clone refuses and the drift gate fails for a reason that has nothing to do with drift.
+- **`pnpm ai:validate` reports six warnings, and that is expected.** They say the hook scripts are not declared in the manifest. They are not, deliberately: the compiler's hook model has four events, and two of this repository's six hooks — a pre-tool-use guard matching Bash, and a Stop hook — cannot be expressed in it. Declaring four and hand-maintaining two would leave the set half-generated, so `scripts/sync-ai.mjs` copies all six, the same way it already did for `.codex/hooks`. If that number changes, something else has drifted.
 
 ## Security response headers
 

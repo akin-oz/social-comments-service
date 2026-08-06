@@ -3,3 +3,11 @@
 # approved here, so a non-interactive install fails while this is unanswered.
 allowBuilds:
   esbuild: true
+# pnpm 11 holds brand-new releases back for a cooldown period as a supply-chain
+# measure, and `pnpm install` records an exemption when one is adopted inside
+# that window. This is a first-party package published the same day, pinned to
+# an immutable registry version with an integrity hash — which is the point of
+# the change that introduced it, replacing a mutable git tag. The exemption is
+# recorded here deliberately rather than left as an unexplained line.
+minimumReleaseAgeExclude:
+  - '@akinlabs/ai-engineering@0.2.0'

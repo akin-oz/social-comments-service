@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "adapter": "claude",
+  "generator": "@akinlabs/ai-engineering",
+  "paths": [
+    ".claude/agents/architecture-guardian.md",
+    ".claude/agents/contract-guardian.md",
+    ".claude/agents/readiness-claim-auditor.md",
+    ".claude/agents/readiness-fresh-clone.md",
+    ".claude/agents/readiness-reviewer-experience.md",
+    ".claude/agents/readiness-security.md",
+    ".claude/agents/readiness-test-integrity.md",
+    ".claude/agents/review-api-contract.md",
+    ".claude/agents/review-data-model.md",
+    ".claude/agents/review-domain-model.md",
+    ".claude/agents/review-principal-architect.md",
+    ".claude/agents/review-reliability.md",
+    ".claude/agents/spec-author.md",
+    ".claude/commands/spec-new.md",
+    ".claude/commands/spec-review.md",
+    ".claude/commands/verify.md",
+    "CLAUDE.md"
+  ]
+}

@@ -26,3 +26,11 @@ rules:
   - engineering
   - spec-gated-execution
   - source-of-truth
+
+# Declared so the compiler emits them. Before 0.2.0 it picked up everything in
+# .ai/commands/ implicitly; now an undeclared command is skipped with a warning
+# and its compiled copy silently freezes.
+commands:
+  - spec-new
+  - spec-review
+  - verify
