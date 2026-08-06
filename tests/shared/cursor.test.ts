@@ -61,6 +61,20 @@ describe('opaque pagination cursor', () => {
     }
   });
 
+  it('rejects a structurally valid cursor whose position is not a timestamp', () => {
+    // The identifier half was guarded; this half reached ::timestamptz and
+    // surfaced as a 500 with an error-level log any caller could raise at
+    // will (Spec-022).
+    const forged = Buffer.from(
+      JSON.stringify({ a: ['CANARY-ATTACKER-VALUE', '2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b001'] }),
+      'utf8',
+    ).toString('base64url');
+
+    expect(() => decodeCursor(forged)).toThrowError(
+      expect.objectContaining({ code: 'INVALID_CURSOR', statusCode: 400 }),
+    );
+  });
+
   it('rejects a structurally valid cursor with an incomplete keyset', () => {
     const payload = Buffer.from(JSON.stringify({ a: ['2026-08-01'] }), 'utf8').toString(
       'base64url',

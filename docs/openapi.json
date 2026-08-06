@@ -448,7 +448,8 @@
                   "body": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 10000
+                    "maxLength": 10000,
+                    "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]*$"
                   }
                 }
               }
@@ -467,12 +468,13 @@
           },
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 255
             },
             "in": "header",
             "name": "idempotency-key",
             "required": true,
-            "description": "Stable across retries of the same logical reply."
+            "description": "Stable across retries of the same logical reply. At most 255 characters."
           }
         ],
         "responses": {

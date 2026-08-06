@@ -183,6 +183,36 @@ describe('documentation endpoints', () => {
     }
   });
 
+  it('treats every plausible off spelling of ENABLE_API_DOCS as off in production', async () => {
+    // An off switch with one accepted spelling is a misconfiguration that
+    // reads as correct: ENABLE_API_DOCS=0 used to publish the schema in
+    // production, the opposite of the intent (Spec-022).
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousFlag = process.env.ENABLE_API_DOCS;
+    try {
+      process.env.NODE_ENV = 'production';
+      for (const off of ['false', '0', 'no', 'off', '', 'FALSE', ' 0 ']) {
+        process.env.ENABLE_API_DOCS = off;
+        const app = createDemoApplication({ logger: false });
+        expect(
+          (await app.inject({ method: 'GET', url: '/openapi.json' })).statusCode,
+          `ENABLE_API_DOCS=${JSON.stringify(off)} must disable docs`,
+        ).toBe(404);
+        await app.close();
+      }
+      // And a genuine enable still enables.
+      process.env.ENABLE_API_DOCS = 'true';
+      const on = createDemoApplication({ logger: false });
+      expect((await on.inject({ method: 'GET', url: '/openapi.json' })).statusCode).toBe(200);
+      await on.close();
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+      if (previousFlag === undefined) delete process.env.ENABLE_API_DOCS;
+      else process.env.ENABLE_API_DOCS = previousFlag;
+    }
+  });
+
   it('refuses an account context that cannot be a tenant identifier', async () => {
     // A malformed value reached a ::uuid cast and produced a 500 with an
     // error-level log, where the contract promises a client error.

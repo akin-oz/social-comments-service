@@ -114,7 +114,13 @@ export const openApiDocument = {
 
 function apiDocsEnabled(explicit: boolean | undefined): boolean {
   if (explicit !== undefined) return explicit;
-  if (process.env.ENABLE_API_DOCS !== undefined) return process.env.ENABLE_API_DOCS !== 'false';
+  const raw = process.env.ENABLE_API_DOCS;
+  if (raw !== undefined) {
+    // An off switch with exactly one accepted spelling is a misconfiguration
+    // that reads as correct: ENABLE_API_DOCS=0 used to publish the
+    // documentation in production (Spec-022).
+    return !['false', '0', 'no', 'off', ''].includes(raw.trim().toLowerCase());
+  }
   return process.env.NODE_ENV !== 'production';
 }
 

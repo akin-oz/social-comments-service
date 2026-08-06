@@ -204,9 +204,16 @@ export class PostgresCommentRepository implements CommentRepository {
   public constructor(private readonly db: Database) {}
 
   public async listByPost(context: TenantContext, query: ListCommentsQuery): Promise<CommentPage> {
-    // A cursor the service issued always holds a UUID; one that does not cannot
-    // name a row, so the page is empty rather than a failed cast.
-    if (query.after !== undefined && !isUuid(query.after.id)) return { items: [], hasMore: false };
+    // A cursor the service issued always holds a UUID and a timestamp; a keyset
+    // holding neither cannot name a row, so the page is empty rather than a
+    // failed cast. Both halves are guarded because both reach a typed cast —
+    // the timestamp half was the one that got missed (Spec-022).
+    if (
+      query.after !== undefined &&
+      (!isUuid(query.after.id) || Number.isNaN(Date.parse(query.after.publishedAt)))
+    ) {
+      return { items: [], hasMore: false };
+    }
     return this.db.withTenant(context.accountId, async (tx) => {
       // One extra row decides `hasMore` without a second count query.
       const result = await tx.query<CommentRow>(

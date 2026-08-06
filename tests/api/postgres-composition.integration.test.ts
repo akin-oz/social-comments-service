@@ -167,4 +167,26 @@ describe.skipIf(!enabled)('PostgreSQL composition through the API', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ error: { code: 'INVALID_CURSOR' } });
   });
+
+  it('rejects a forged cursor whose timestamp half is not a timestamp', async () => {
+    // Reproduced by the security review: a structurally valid cursor with an
+    // arbitrary string where the timestamp belongs reached ::timestamptz and
+    // answered 500 with an error-level log. The contract says a cursor the
+    // service did not issue is INVALID_CURSOR (Spec-022).
+    const forged = Buffer.from(
+      JSON.stringify({ a: ['CANARY-ATTACKER-VALUE', tenantA.accountId] }),
+      'utf8',
+    ).toString('base64url');
+
+    const response = await application.inject({
+      method: 'GET',
+      url: `/v2/posts/${tenantA.postId}/comments?cursor=${encodeURIComponent(forged)}`,
+      headers: { 'x-account-id': tenantA.accountId },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: { code: 'INVALID_CURSOR', reason: 'cursor_not_issued_by_service' },
+    });
+  });
 });

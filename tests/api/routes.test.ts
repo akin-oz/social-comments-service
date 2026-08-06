@@ -460,6 +460,97 @@ describe('comment REST API', () => {
     await app.close();
   });
 
+  it('rejects a reply body carrying a NUL before the provider is contacted', async () => {
+    // JSON permits a NUL that PostgreSQL text does not, and the reply reaches
+    // the provider before the insert. Without the schema guard this published
+    // real content and then orphaned it — raising the one log record the
+    // operations guide says always warrants a human, on demand (Spec-022).
+    const records: { level: string; fields: Record<string, unknown> }[] = [];
+    const app = createDemoApplication({ logger: false });
+    captureLogs(app, records);
+    const { body } = await listComments(app);
+    const commentId = body.data[0]?.id ?? '';
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/v2/comments/${commentId}/replies`,
+      headers: { ...auth, 'idempotency-key': 'nul-1' },
+      payload: { body: `CANARY-BODY-${String.fromCharCode(0)}-NUL` },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: { code: 'INVALID_REQUEST', reason: 'request_validation_failed' },
+    });
+    // The refusal happened at the edge: nothing was published, nothing orphaned.
+    expect(records.some((r) => r.fields.event === 'comments.reply.orphaned')).toBe(false);
+    expect(records.some((r) => r.level === 'error')).toBe(false);
+
+    // And an ordinary multi-line body still passes.
+    const fine = await app.inject({
+      method: 'POST',
+      url: `/v2/comments/${commentId}/replies`,
+      headers: { ...auth, 'idempotency-key': 'nul-2' },
+      payload: { body: 'line one\nline two\ttabbed' },
+    });
+    expect(fine.statusCode).toBe(201);
+    await app.close();
+  });
+
+  it('bounds the idempotency key at the edge, not at the btree', async () => {
+    // Unbounded, an incompressible 4000-character key overflowed the unique
+    // index row and surfaced as a 500; a compressible one was stored with no
+    // ceiling (Spec-022).
+    const app = createDemoApplication({ logger: false });
+    const { body } = await listComments(app);
+    const commentId = body.data[0]?.id ?? '';
+
+    const atLimit = await app.inject({
+      method: 'POST',
+      url: `/v2/comments/${commentId}/replies`,
+      headers: { ...auth, 'idempotency-key': 'k'.repeat(255) },
+      payload: { body: 'Thanks!' },
+    });
+    const overLimit = await app.inject({
+      method: 'POST',
+      url: `/v2/comments/${commentId}/replies`,
+      headers: { ...auth, 'idempotency-key': 'k'.repeat(256) },
+      payload: { body: 'Thanks!' },
+    });
+
+    expect(atLimit.statusCode).toBe(201);
+    expect(overLimit.statusCode).toBe(400);
+    expect(overLimit.json()).toMatchObject({
+      error: { code: 'INVALID_REQUEST', reason: 'request_validation_failed' },
+    });
+    await app.close();
+  });
+
+  it('enforces the documented input bounds, not merely declares them', async () => {
+    // Removing these bounds from the schema failed only the OpenAPI golden
+    // file — which the documented fix regenerates. A golden compare detects
+    // that a declaration changed, never that it is enforced (Spec-020).
+    const app = createDemoApplication({ logger: false });
+    const { body } = await listComments(app);
+    const commentId = body.data[0]?.id ?? '';
+
+    const overLimit = await app.inject({
+      method: 'GET',
+      url: `/v2/posts/${demoPost.id}/comments?limit=101`,
+      headers: auth,
+    });
+    const overLongBody = await app.inject({
+      method: 'POST',
+      url: `/v2/comments/${commentId}/replies`,
+      headers: { ...auth, 'idempotency-key': 'long-1' },
+      payload: { body: 'x'.repeat(10_001) },
+    });
+
+    expect(overLimit.statusCode).toBe(400);
+    expect(overLongBody.statusCode).toBe(400);
+    await app.close();
+  });
+
   it('returns a cursor exactly when there is more to read', async () => {
     const app = createDemoApplication({ logger: false });
 

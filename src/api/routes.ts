@@ -165,7 +165,20 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
           type: 'object',
           required: ['body'],
           additionalProperties: false,
-          properties: { body: { type: 'string', minLength: 1, maxLength: 10000 } },
+          properties: {
+            body: {
+              type: 'string',
+              minLength: 1,
+              maxLength: 10000,
+              // No C0 control characters except tab, newline, and carriage
+              // return. JSON permits a NUL that PostgreSQL text does not, and
+              // the reply reaches the provider before it reaches the insert —
+              // so an unstorable body used to publish first and orphan second,
+              // raising the one log record that always pages a human, on
+              // demand (Spec-022).
+              pattern: '^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]*$',
+            },
+          },
         },
         headers: {
           type: 'object',
@@ -173,7 +186,13 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
           properties: {
             'idempotency-key': {
               type: 'string',
-              description: 'Stable across retries of the same logical reply.',
+              // Stored in a unique btree index. Unbounded, an incompressible
+              // 4000-character key overflowed the index row and surfaced as a
+              // 500; a compressible one was accepted and stored without
+              // ceiling (Spec-022).
+              maxLength: 255,
+              description:
+                'Stable across retries of the same logical reply. At most 255 characters.',
             },
           },
         },

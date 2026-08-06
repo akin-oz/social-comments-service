@@ -305,21 +305,28 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
   });
 
   it('deduplicates a provider comment observed twice', async () => {
-    const before = await comments.listByPost(contextA, {
-      postId: tenantA.postId,
-      platform: tenantA.platform,
-      limit: 50,
-    });
-    await comments.upsertMany(contextA, [
-      comment(tenantA, 'a-comment-1', '2026-08-01T10:00:00.000Z'),
-    ]);
-    const after = await comments.listByPost(contextA, {
-      postId: tenantA.postId,
-      platform: tenantA.platform,
-      limit: 50,
-    });
+    // On a fresh post so the count is exact: the seeded post accumulates rows
+    // across runs and had reached 57, pinning both sides of a 50-limit
+    // comparison at 50 whatever the upsert did — a duplicate row could not have
+    // moved either number (Spec-020).
+    const externalId = `dedup-${crypto.randomUUID()}`;
+    const observe = () =>
+      comments.upsertMany(contextA, [
+        { ...comment(tenantA, externalId, '2026-08-01T10:00:00.000Z'), postId: scratchPostId },
+      ]);
+    await observe();
+    await observe();
 
-    expect(after.items).toHaveLength(before.items.length);
+    // Resolve the assigned id for this external id, then count its occurrences.
+    // The scratch post is shared by other tests in this file, so filter by the
+    // row this test created rather than by the post.
+    const [stored] = await observe();
+    const page = await comments.listByPost(contextA, {
+      postId: scratchPostId,
+      platform: tenantA.platform,
+      limit: 500,
+    });
+    expect(page.items.filter((item) => item.id === stored!.id)).toHaveLength(1);
   });
 
   it('hides another tenant comments from the repository', async () => {
@@ -1042,6 +1049,54 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     ).resolves.toEqual({ items: [], hasMore: false });
   });
 
+  it('breaks a keyset tie on id, so comments sharing a timestamp all page through', async () => {
+    // Every comment fixture in the repository had a distinct published_at, so
+    // dropping the (published_at, id) tie-break — in either adapter — left the
+    // suite green. Real platforms report second-granularity timestamps and a
+    // busy post routinely has several comments inside one second; without the
+    // tie-break a page boundary landing inside such a group silently drops the
+    // rest of the group (Spec-020).
+    const tie = '2026-08-01T20:30:00.000Z';
+    const stored = (
+      await comments.upsertMany(contextA, [
+        { ...comment(tenantA, `tie-a-${crypto.randomUUID()}`, tie), postId: scratchPostId },
+        { ...comment(tenantA, `tie-b-${crypto.randomUUID()}`, tie), postId: scratchPostId },
+        { ...comment(tenantA, `tie-c-${crypto.randomUUID()}`, tie), postId: scratchPostId },
+      ])
+    ).map((item) => item.id);
+
+    const walked: string[] = [];
+    let after: { publishedAt: string; id: string } | undefined;
+    for (let guard = 0; guard < 10; guard += 1) {
+      const page: CommentPage = await comments.listByPost(contextA, {
+        postId: scratchPostId,
+        platform: tenantA.platform,
+        limit: 1,
+        ...(after === undefined ? {} : { after }),
+      });
+      walked.push(...page.items.map((item) => item.id));
+      const last = page.items[page.items.length - 1];
+      if (!page.hasMore || last === undefined) break;
+      after = { publishedAt: last.publishedAt, id: last.id };
+    }
+
+    // Every tied comment reached exactly once, none dropped at a page boundary.
+    for (const id of stored) expect(walked.filter((seen) => seen === id)).toHaveLength(1);
+  });
+
+  it('treats a keyset holding a non-timestamp position as absent', async () => {
+    // The mirror of the non-uuid guard below it: this half reached
+    // $4::timestamptz and produced a 500 with an error-level log (Spec-022).
+    await expect(
+      comments.listByPost(contextA, {
+        postId: tenantA.postId,
+        platform: tenantA.platform,
+        limit: 10,
+        after: { publishedAt: 'CANARY-ATTACKER-VALUE', id: crypto.randomUUID() },
+      }),
+    ).resolves.toEqual({ items: [], hasMore: false });
+  });
+
   it('scopes the parent join to one connection when a tenant has two', async () => {
     // Every seed tenant had exactly one social account, so
     // `parent.social_account_id = c.social_account_id` could never exclude
@@ -1054,7 +1109,7 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     try {
       // The same provider identifier under each of tenant A's two connections.
       for (const [socialAccountId, postId] of [
-        [tenantA.socialAccountId, tenantA.postId],
+        [tenantA.socialAccountId, scratchPostId],
         [seedSecondConnection.socialAccountId, seedSecondConnection.postId],
       ] as const) {
         await owner.query(
@@ -1073,6 +1128,7 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     const [reply] = await comments.upsertMany(contextA, [
       {
         ...comment(tenantA, `two-conn-reply-${crypto.randomUUID()}`, '2026-08-01T20:00:00.000Z'),
+        postId: scratchPostId,
         externalParentCommentId: sharedParentExternal,
       },
     ]);
@@ -1099,9 +1155,10 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     })();
     expect(reply!.parentCommentId).toBe(expectedParent);
 
-    // And the read-back does not duplicate the reply row.
+    // And the read-back does not duplicate the reply row. On the scratch post,
+    // which does not accumulate across runs (Spec-020).
     const page = await comments.listByPost(contextA, {
-      postId: tenantA.postId,
+      postId: scratchPostId,
       platform: tenantA.platform,
       limit: 500,
     });
