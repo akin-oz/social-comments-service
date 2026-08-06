@@ -1,7 +1,8 @@
 ---
 adr: 0010
 title: Use internal UUIDs with explicit external-ID mapping at adapter boundaries
-status: accepted
+status: superseded
+superseded_by: ADR-0013
 ---
 
 # ADR-0010: Use internal UUIDs with explicit external-ID mapping at adapter boundaries

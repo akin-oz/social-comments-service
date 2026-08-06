@@ -20,18 +20,20 @@ This is not intended to be a CRUD wrapper. The design treats external platforms 
 
 ### What the brief asked for, and where it is
 
-| Asked for                      | Where                                                                                                                                                                                                                                        |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Database schema                | [docs/database.md](docs/database.md) for the model, [migrations/](migrations/) for the SQL                                                                                                                                                   |
-| API design                     | [docs/api-design.md](docs/api-design.md), with [docs/openapi.json](docs/openapi.json) generated from the routes                                                                                                                              |
-| Relevant TypeScript code       | [src/](src/) — the two operations are [`listComments`](src/comments/comment-service.ts#L146) and [`replyToComment`](src/comments/comment-service.ts#L233); [contracts.ts](src/comments/contracts.ts) is the shorter read for the shape of it |
-| Explanation of major decisions | [Design decisions](#design-decisions) below, seven of them with their costs                                                                                                                                                                  |
-| Documented assumptions         | [docs/assumptions.md](docs/assumptions.md), eleven numbered and referenced from the code                                                                                                                                                     |
-| How AI tools were used         | [AI usage disclosure](#ai-usage-disclosure) below                                                                                                                                                                                            |
+| Asked for                      | Where                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database schema                | [docs/database.md](docs/database.md) for the model, [migrations/](migrations/) for the SQL                                                                                                                                                                                                                                                                  |
+| API design                     | [docs/api-design.md](docs/api-design.md), with [docs/openapi.json](docs/openapi.json) generated from the routes                                                                                                                                                                                                                                             |
+| Relevant TypeScript code       | [src/](src/) — the two operations are `listComments` and `replyToComment` in [comment-service.ts](src/comments/comment-service.ts); [contracts.ts](src/comments/contracts.ts) is the shorter read for the shape of it. (No line anchors: identities are assigned, files move, and a link that drifts is the exact staleness this repository gates against.) |
+| Explanation of major decisions | [Design decisions](#design-decisions) below, seven of them with their costs                                                                                                                                                                                                                                                                                 |
+| Documented assumptions         | [docs/assumptions.md](docs/assumptions.md), eleven numbered and referenced from the code                                                                                                                                                                                                                                                                    |
+| How AI tools were used         | [AI usage disclosure](#ai-usage-disclosure) below                                                                                                                                                                                                                                                                                                           |
 
 ## Design decisions
 
 Seven decisions shaped this service. Each is stated with what it cost, because a decision without a cost is usually a decision that was never made. The linked ADR or specification carries the full argument, including the alternatives that were rejected.
+
+Every decision below cites the ADR or specification that governs it. Those are produced under a spec-gate process — proposed with `approved: no`, approved only by the human maintainer, never self-approved — described in full under [AI usage disclosure](#ai-usage-disclosure).
 
 **Platform differences are made explicit, never emulated.** Every provider sits behind one adapter interface and declares which operations it supports. A platform that cannot perform an operation produces a typed `UNSUPPORTED_CAPABILITY` error rather than the service quietly faking it, because emulating a missing capability converts a platform difference into a data problem that surfaces much later and far from its cause. Adding a platform means writing an adapter, wiring credentials, and recording its capabilities — no route, use case, or schema changes. The cost is a layer of indirection between the service and every provider, worth paying only because the brief says more platforms are coming. See [ADR-0004](docs/decisions/0004-platform-abstraction.md) and the [capability matrix](docs/provider-capability-matrix.md).
 
@@ -70,8 +72,17 @@ Judgement shows as much in what is absent. There are no microservices, queues, e
 │   ├── repositories/     # in-memory and PostgreSQL persistence
 │   └── shared/           # identity, cursors, errors, observability ports
 ├── tests/
-└── docker-compose.yml    # PostgreSQL, migrate and seed, then the service
+├── docker-compose.yml    # PostgreSQL, migrate and seed, then the service
+│
+│   # Generated from .ai/ by `pnpm ai:sync` — see the AI usage disclosure below.
+├── .ai/                  # source of truth for the assistant workspace
+├── .claude/  .codex/     # compiled agents, rules, commands, hooks
+├── CLAUDE.md  AGENTS.md  # compiled root instructions for each assistant
+├── .github/              # CI workflow
+└── scripts/              # the ai:sync wrapper
 ```
+
+A fresh `ls -la` shows the generated `.ai/`, `.claude/`, `.codex/`, `CLAUDE.md`, and `AGENTS.md` alongside the source tree above; all are compiled from `.ai/` and explained under [AI usage disclosure](#ai-usage-disclosure). They are governance scaffolding, not part of the service.
 
 Dependencies point inward: `api` and `repositories` depend on `comments`, never the reverse, and nothing in `comments` imports Fastify, `pg`, or a logging library.
 
@@ -180,6 +191,8 @@ Known limits are stated rather than smoothed over, and [docs/roadmap.md](docs/ro
 
 The governance above is not hand-maintained per assistant. It is compiled by [AI Engineering OS](https://github.com/akin-oz/ai-engineering) (`@akinlabs/ai-engineering`), a separate open-source project of mine that exists because every assistant wants its instructions in a different place and format. Copying a few rules into `CLAUDE.md` and `AGENTS.md` is fine until the rules grow or a second assistant appears, at which point the copies drift and a reviewer has to check the same policy in several files.
 
+`pnpm ai:validate` prints six warnings on every run — one per hook script, because the 0.2.0 compiler's four-event hook model cannot express this repository's Bash-matching commit guard or its Stop-event verification hook, so the hooks are copied by `scripts/sync-ai.mjs` rather than declared in the manifest. The warnings are expected and the workspace is valid; `docs/operations.md` explains the arrangement in full.
+
 Instead, project intent lives once in [.ai/](.ai/) as a manifest, rules, agents, hooks, and commands, and the compiler generates the runtime artifacts for each target. This repository declares three rules, thirteen agents, two read-only review teams, and both the Claude and Codex targets; `CLAUDE.md`, `AGENTS.md`, `.claude/`, and `.codex/` are all generated from that source and are never edited by hand.
 
 ```bash
@@ -194,6 +207,8 @@ CI runs `pnpm ai:validate` alongside typecheck, lint, formatting, and tests, so 
 All twenty-five approved specifications and fourteen ADRs are implemented. Retrieving comments for a published post and replying to a comment both work end to end, on PostgreSQL and on in-memory adapters, demonstrable with the commands above.
 
 The PostgreSQL adapter is exercised against a real database. Tenant isolation is proven by a test that removes the repository's own `account_id` predicate and confirms another tenant's rows stay invisible across all five tenant-scoped tables, by a second test that reads `pg_roles` to confirm the service role holds neither `SUPERUSER` nor `BYPASSRLS`, and by a third that deliberately drifts that role and asserts the migration corrects it. CI runs the suite against a PostgreSQL service container.
+
+> **On the CI tab:** the two most recent runs show red for reasons outside the repository. One failed a `prettier --check` on a file the very next commit added to `.prettierignore`; the next never acquired a runner during a [declared GitHub Actions outage](https://www.githubstatus.com/). Every run across milestones 9–12 before that was green, service container and all, and the current tree passes the entire CI sequence locally (`install → ai:validate → drift gate → typecheck → lint → format:check → migrate → seed → test → openapi gate`). A clean green run will follow once Actions recovers.
 
 Two read-only **review boards** — task forces of specialised agents defined in [.claude/agent-teams/](.claude/agent-teams/), run at a milestone rather than continuously, whose method is to re-apply real defects and measure whether the suite notices — swept the repository before submission. They found eighteen items. Five were already fixed and double-counted across the two reports; the rest are closed, each under an approved specification: the reply operation's lease and its `unknown` terminal state ([Spec-015](specs/015-reply-operation-lifecycle.md)), the authorised connection the provider port had nowhere to put ([Spec-016](specs/016-provider-authorization-context.md)), machine-readable error reasons and the `/v2` compatibility policy ([Spec-017](specs/017-client-actionable-errors.md)), the isolation and schema gaps above ([Spec-018](specs/018-isolation-and-schema-completeness.md)), single-flight hydration ([Spec-019](specs/019-provider-load-protection.md)), the five surviving test mutations ([Spec-020](specs/020-test-integrity.md)), and the reply-depth invariant that was documented but never enforced ([ADR-0014](docs/decisions/0014-reply-depth.md)).
 

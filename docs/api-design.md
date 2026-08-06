@@ -100,7 +100,7 @@ X-Account-Id: 2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b001
 }
 ```
 
-Comment and post identifiers are service-owned UUIDs (ADR-0010). The provider’s own identifiers are stored for deduplication but are never serialized to clients. `author.id` remains the provider’s author identifier, because the author is not a resource this service owns.
+Comment and post identifiers are service-owned UUIDs, assigned by persistence ([ADR-0013](decisions/0013-assigned-comment-identity.md), which supersedes ADR-0010). The provider’s own identifiers are stored for deduplication but are never serialized to clients. `author.id` remains the provider’s author identifier, because the author is not a resource this service owns.
 
 ## POST `/v2/comments/{commentId}/replies`
 
@@ -237,6 +237,6 @@ The risk this policy accepts is that a new enum member breaks a client validatin
 
 Responses use opaque cursors. Clients must not decode or construct them; a cursor the service did not issue is rejected with `INVALID_CURSOR`.
 
-A cursor encodes two things: the caller’s keyset position in the local snapshot, expressed as the last returned `(publishedAt, id)` pair, and the provider’s own continuation token when one is outstanding. Ordering is `(publishedAt, id)` ascending, which matches the `comments (account_id, post_id, published_at, id)` index.
+A cursor encodes one thing: the caller’s keyset position in the local snapshot, the last returned `(publishedAt, id)` pair. It carried the provider’s continuation token in an earlier version; [Spec-014](../specs/014-read-path-completeness.md) removed that, because handing a client the very token vendors document must not be stored is a leak, and the service reads its stored snapshot state instead. Ordering is `(publishedAt, id)` ascending, which matches the `comments (account_id, post_id, published_at, id)` index.
 
 Because the position is a keyset rather than an offset, a comment that arrives before the caller’s position does not shift the remaining pages: the caller sees neither duplicates nor gaps. Such a comment simply is not part of that pagination run and appears on a subsequent first-page request.
