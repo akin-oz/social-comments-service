@@ -749,7 +749,14 @@ export class CommentService {
     operation: ReplyOperation,
   ): Promise<Comment | null> {
     if (operation.externalReplyId !== null) {
-      const stored = await this.comments.findByExternalId(context, operation.externalReplyId);
+      // The operation's parent comment names the connection the reply went out
+      // through, which is the scope the provider identifier is unique within
+      // (Spec-024).
+      const stored = await this.comments.findReplyByExternalId(
+        context,
+        operation.commentId,
+        operation.externalReplyId,
+      );
       if (stored) {
         await this.operations.complete(context, operation.id, stored.id);
         this.metrics.increment('comments.reply.reconciled');

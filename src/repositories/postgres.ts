@@ -241,16 +241,27 @@ export class PostgresCommentRepository implements CommentRepository {
     });
   }
 
-  public async findByExternalId(
+  public async findReplyByExternalId(
     context: TenantContext,
+    siblingCommentId: string,
     externalId: string,
   ): Promise<Comment | null> {
+    if (!isUuid(siblingCommentId)) return null;
     return this.db.withTenant(context.accountId, async (tx) => {
+      // Scoped to the sibling's social account, which is the scope
+      // `unique (social_account_id, external_comment_id)` guarantees. Scoping
+      // by account alone returned an arbitrary row when a tenant held the same
+      // provider identifier under two connections (Spec-024).
       const result = await tx.query<CommentRow>(
         `select ${commentColumns}
          ${commentSource}
-         where c.account_id = $1 and c.external_comment_id = $2`,
-        [context.accountId, externalId],
+         where c.account_id = $1
+           and c.external_comment_id = $2
+           and c.social_account_id = (
+             select sibling.social_account_id from comments sibling
+             where sibling.id = $3 and sibling.account_id = $1
+           )`,
+        [context.accountId, externalId, siblingCommentId],
       );
       const row = result.rows[0];
       return row ? toComment(row) : null;
@@ -281,11 +292,22 @@ export class PostgresCommentRepository implements CommentRepository {
       // Read back after the whole batch is stored, so a reply that arrives
       // alongside its parent resolves against it, and so the identities are
       // the ones the database assigned rather than any the caller supplied.
+      // Scoped to the post's social account as well as the account. Every
+      // observation in a batch comes from one provider call and therefore one
+      // connection, so this is currently safe either way — but "safe because
+      // of how it happens to be called" is exactly what the parent-join
+      // predicate looked like before a two-connection fixture made it
+      // reachable (Spec-024).
       const result = await tx.query<CommentRow>(
         `select ${commentColumns}
          ${commentSource}
-         where c.account_id = $1 and c.external_comment_id = any($2::text[])`,
-        [context.accountId, observed.map((item) => item.externalId)],
+         where c.account_id = $1
+           and c.external_comment_id = any($2::text[])
+           and c.social_account_id = (
+             select target.social_account_id from posts target
+             where target.id = $3 and target.account_id = $1
+           )`,
+        [context.accountId, observed.map((item) => item.externalId), observed[0]!.postId],
       );
       return result.rows.map(toComment);
     });

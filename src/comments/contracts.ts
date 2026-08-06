@@ -41,11 +41,24 @@ export interface CommentRepository {
   listByPost(context: TenantContext, query: ListCommentsQuery): Promise<CommentPage>;
   findById(context: TenantContext, commentId: string): Promise<Comment | null>;
   /**
-   * Finds a comment by the provider's identifier for it. Used to reconcile a
-   * reply that was published and stored while the operation recording it was
-   * not completed (Spec-015).
+   * Finds the reply an operation published, by the provider identifier recorded
+   * on that operation. Used to reconcile an operation that was left pending
+   * because its completion write was lost (Spec-015).
+   *
+   * Takes the sibling comment — the parent the reply answers — rather than a
+   * bare identifier, because provider identifiers are unique only within a
+   * social account. A tenant with two connections on one platform can hold the
+   * same identifier twice, legitimately, and an account-scoped lookup would
+   * pick whichever row the planner returned first, completing an operation
+   * against a reply published through a different connection. The sibling
+   * names the connection, so the lookup can be as narrow as the constraint
+   * that guarantees it (Spec-024).
    */
-  findByExternalId(context: TenantContext, externalId: string): Promise<Comment | null>;
+  findReplyByExternalId(
+    context: TenantContext,
+    siblingCommentId: string,
+    externalId: string,
+  ): Promise<Comment | null>;
   /** Translates an internal identity back to the provider identifier (ADR-0010). */
   resolveExternalId(context: TenantContext, commentId: string): Promise<string | null>;
   /** Stores observations and returns them with the identities persistence assigned. */

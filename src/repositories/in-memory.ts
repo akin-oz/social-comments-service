@@ -107,14 +107,21 @@ export class InMemoryCommentRepository implements CommentRepository {
     return stored ? this.toComment(context.accountId, stored) : null;
   }
 
-  public async findByExternalId(
+  public async findReplyByExternalId(
     context: TenantContext,
+    siblingCommentId: string,
     externalId: string,
   ): Promise<Comment | null> {
+    // This adapter has no social account, so the post the sibling belongs to
+    // stands in for the connection: one post is published through exactly one
+    // connection, which is the same scoping the SQL twin applies (Spec-024).
+    const sibling = this.byId.get(context.accountId, siblingCommentId);
+    if (sibling === undefined) return null;
     const id = this.byExternalId.get(context.accountId, externalId);
     if (id === undefined) return null;
     const stored = this.byId.get(context.accountId, id);
-    return stored ? this.toComment(context.accountId, stored) : null;
+    if (stored === undefined || stored.observed.postId !== sibling.observed.postId) return null;
+    return this.toComment(context.accountId, stored);
   }
 
   public async resolveExternalId(

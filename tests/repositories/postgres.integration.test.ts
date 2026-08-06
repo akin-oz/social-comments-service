@@ -537,17 +537,106 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     });
   });
 
-  it('finds a stored comment by the provider identifier recovery uses', async () => {
-    const externalId = `recovery-${crypto.randomUUID()}`;
+  it('finds a stored reply by the provider identifier recovery uses', async () => {
+    const parentExternal = `recovery-parent-${crypto.randomUUID()}`;
+    const replyExternal = `recovery-${crypto.randomUUID()}`;
+    const [parent] = await comments.upsertMany(contextA, [
+      comment(tenantA, parentExternal, '2026-08-01T15:00:00.000Z'),
+    ]);
     const [stored] = await comments.upsertMany(contextA, [
-      comment(tenantA, externalId, '2026-08-01T15:00:00.000Z'),
+      comment(tenantA, replyExternal, '2026-08-01T15:01:00.000Z'),
     ]);
 
-    await expect(comments.findByExternalId(contextA, externalId)).resolves.toMatchObject({
-      id: stored!.id,
-    });
-    // Another tenant's provider identifier resolves to nothing here.
-    await expect(comments.findByExternalId(contextB, externalId)).resolves.toBeNull();
+    await expect(
+      comments.findReplyByExternalId(contextA, parent!.id, replyExternal),
+    ).resolves.toMatchObject({ id: stored!.id });
+    // Another tenant cannot resolve it at all, sibling or no sibling.
+    await expect(
+      comments.findReplyByExternalId(contextB, parent!.id, replyExternal),
+    ).resolves.toBeNull();
+  });
+
+  it('reads back only the batch it stored, not another connection with the same id', async () => {
+    // The read-back after an upsert selected by account and external id alone.
+    // With two connections holding the same provider identifier it returned
+    // both rows, so a one-item batch came back as two and the caller — which
+    // destructures the first — could take the wrong one (Spec-024).
+    const shared = `readback-${crypto.randomUUID()}`;
+
+    const owner = new Client({ connectionString: ownerUrl });
+    await owner.connect();
+    try {
+      await owner.query(
+        `insert into comments
+           (account_id, post_id, social_account_id, external_comment_id,
+            author_external_id, author_display_name, body, published_at, updated_at)
+         values ($1, $2, $3, $4, 'author', 'Ada Lovelace', 'other connection', now(), now())
+         on conflict (social_account_id, external_comment_id) do nothing`,
+        [
+          tenantA.accountId,
+          seedSecondConnection.postId,
+          seedSecondConnection.socialAccountId,
+          shared,
+        ],
+      );
+    } finally {
+      await owner.end();
+    }
+
+    const stored = await comments.upsertMany(contextA, [
+      comment(tenantA, shared, '2026-08-01T22:00:00.000Z'),
+    ]);
+
+    expect(stored).toHaveLength(1);
+    expect(stored[0]!.postId).toBe(tenantA.postId);
+  });
+
+  it('resolves a reply on the sibling connection, not another of the same tenant', async () => {
+    // Provider identifiers are unique per social account, so a tenant with two
+    // connections can hold the same one twice. Scoping the lookup by account
+    // alone returned whichever row the planner produced first, which could
+    // complete a reply operation against a reply published through a different
+    // connection (Spec-024).
+    const shared = `two-conn-reply-${crypto.randomUUID()}`;
+    const parentExternal = `two-conn-recovery-parent-${crypto.randomUUID()}`;
+
+    const [parentOnFirst] = await comments.upsertMany(contextA, [
+      comment(tenantA, parentExternal, '2026-08-01T21:00:00.000Z'),
+    ]);
+    const [replyOnFirst] = await comments.upsertMany(contextA, [
+      comment(tenantA, shared, '2026-08-01T21:01:00.000Z'),
+    ]);
+
+    // The same provider identifier under tenant A's other connection.
+    const owner = new Client({ connectionString: ownerUrl });
+    await owner.connect();
+    let replyOnSecond = '';
+    try {
+      const inserted = await owner.query<{ id: string }>(
+        `insert into comments
+           (account_id, post_id, social_account_id, external_comment_id,
+            author_external_id, author_display_name, body, published_at, updated_at)
+         values ($1, $2, $3, $4, 'author', 'Ada Lovelace', 'other connection', now(), now())
+         on conflict (social_account_id, external_comment_id) do update
+           set last_seen_at = now()
+         returning id`,
+        [
+          tenantA.accountId,
+          seedSecondConnection.postId,
+          seedSecondConnection.socialAccountId,
+          shared,
+        ],
+      );
+      replyOnSecond = inserted.rows[0]!.id;
+    } finally {
+      await owner.end();
+    }
+    expect(replyOnSecond).not.toBe(replyOnFirst!.id);
+
+    const resolved = await comments.findReplyByExternalId(contextA, parentOnFirst!.id, shared);
+
+    expect(resolved?.id).toBe(replyOnFirst!.id);
+    expect(resolved?.id).not.toBe(replyOnSecond);
   });
 
   it('does not resolve a post that is not published', async () => {
@@ -856,7 +945,7 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
       ]),
     ).rejects.toThrow();
 
-    await expect(comments.findByExternalId(contextA, good)).resolves.toBeNull();
+    await expect(comments.findReplyByExternalId(contextA, storedA[0]!, good)).resolves.toBeNull();
   });
 
   it('treats a malformed comment identifier as absent rather than a failed cast', async () => {

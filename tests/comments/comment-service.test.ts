@@ -578,8 +578,9 @@ describe('replying to a comment', () => {
     // be tried before the operation is written off as unknown.
     const { service, operations, comments, parentId } = await withCachedComments();
     const published = await service.replyToComment(tenant, parentId, 'Thank you!', 'key-1');
-    const stored = await comments.findByExternalId(
+    const stored = await comments.findReplyByExternalId(
       tenant,
+      parentId,
       (await operations.findByIdempotencyKey(tenant, 'key-1'))!.externalReplyId!,
     );
     expect(stored?.id).toBe(published.id);
