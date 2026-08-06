@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import Fastify, { type FastifyInstance } from 'fastify';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
@@ -128,9 +130,21 @@ export function createApplication(dependencies: ApplicationDependencies = {}): F
               res: (reply: { statusCode: number }) => ({ statusCode: reply.statusCode }),
             },
           },
-    requestIdHeader: 'x-request-id',
+    // The request identifier is generated here, not read from a header.
+    // Fastify's `requestIdHeader` honoured `x-request-id` verbatim, so an
+    // unbounded caller-supplied string flowed into every log record and every
+    // error body — a 229-character value was accepted, and two unrelated
+    // requests could be given one id. The correlation identifier an operator
+    // reconstructs a request by must not be attacker-chosen (Spec-022).
+    // Cross-system correlation belongs to the gateway, which can do it without
+    // handing the choice to the caller.
+    requestIdHeader: false,
+    genReqId: () => randomUUID(),
     // A request that outlives this is one the client has already abandoned.
     requestTimeout: 30_000,
+    // The largest documented body is a 10,000-character reply. Fastify's
+    // default is 1 MB, a hundredfold of parse work the contract never wanted.
+    bodyLimit: 64 * 1024,
   });
   const logger = toLoggerPort(app.log);
 
@@ -164,6 +178,24 @@ export function createApplication(dependencies: ApplicationDependencies = {}): F
   });
 
   app.get('/health', { schema: { hide: true } }, async () => ({ status: 'ok' }));
+
+  // Fastify's default 404 has its own body shape and names the framework, so a
+  // client handling `error.code` uniformly met one response without one.
+  app.setNotFoundHandler((request, reply) => {
+    request.log.warn(
+      { event: 'http.request.rejected', code: 'ROUTE_NOT_FOUND', statusCode: 404 },
+      'request rejected',
+    );
+    return reply.code(404).send({
+      error: {
+        code: 'ROUTE_NOT_FOUND',
+        reason: 'route_not_found',
+        message: 'No route matches this method and path.',
+        requestId: request.id,
+      },
+    });
+  });
+
   return app;
 }
 

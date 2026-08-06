@@ -25,6 +25,7 @@ export const errorCodeValues = [
   'PROVIDER_UNAVAILABLE',
   'INVALID_CURSOR',
   'INVALID_REQUEST',
+  'ROUTE_NOT_FOUND',
   'INTERNAL_ERROR',
 ] as const;
 
@@ -198,6 +199,8 @@ const errorDescriptions: Readonly<Record<number, string>> = {
   404: 'The resource is not visible in the caller scope.',
   409: 'The idempotency key cannot be honoured.',
   422: 'The request is well formed but cannot be performed on this resource.',
+  413: 'The request body is larger than the service accepts.',
+  415: 'The request content type is not supported.',
   429: 'A provider or service rate limit was reached.',
   500: 'An unexpected failure occurred inside the service.',
   502: 'The provider returned an upstream failure.',

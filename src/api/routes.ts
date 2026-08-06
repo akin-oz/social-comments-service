@@ -184,7 +184,8 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
             additionalProperties: false,
             properties: { data: { $ref: 'Comment#' } },
           },
-          ...errorResponses([400, 401, 404, 409, 422, 429, 500, 502, 503]),
+          // 413 and 415 are reachable only here: this is the one route with a body.
+          ...errorResponses([400, 401, 404, 409, 413, 415, 422, 429, 500, 502, 503]),
         },
       },
     },
@@ -241,6 +242,20 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
         .code(error.statusCode)
         .send(errorResponse(error.code, error.reason, error.message, request.id));
     }
+    // Fastify's own failures — an oversized body, malformed JSON, an
+    // unsupported media type — are none of the three above, but every one of
+    // them carries the status it deserves. Reading it turns a client mistake
+    // into a 4xx logged at warn, where before it fell through to
+    // INTERNAL_ERROR with a stack trace at error level: a page-worthy signal
+    // anyone could raise at will (Spec-022).
+    const transport = transportFailure(error);
+    if (transport) {
+      logRejection(request, transport.code, transport.statusCode);
+      return reply
+        .code(transport.statusCode)
+        .send(errorResponse(transport.code, transport.reason, transport.message, request.id));
+    }
+
     // A driver error carries detail, internalQuery, and constraint values that
     // may quote row content. Only the shape is logged (ADR-0011).
     request.log.error(
@@ -264,6 +279,59 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
         ),
       );
   });
+}
+
+/**
+ * Classifies a framework error the handler above does not otherwise recognise.
+ *
+ * Only sub-500 statuses are treated this way. A framework error carrying 500
+ * is a genuine internal failure and must keep its stack trace and its error
+ * level.
+ */
+function transportFailure(error: unknown): {
+  statusCode: number;
+  code: ServiceErrorCode;
+  reason: ServiceErrorReason;
+  message: string;
+} | null {
+  const status = (error as { statusCode?: unknown }).statusCode;
+  if (typeof status !== 'number' || status < 400 || status >= 500) return null;
+
+  const fastifyCode = (error as { code?: unknown }).code;
+  if (status === 413) {
+    return {
+      statusCode: 413,
+      code: 'INVALID_REQUEST',
+      reason: 'request_body_too_large',
+      message: 'The request body is larger than this service accepts.',
+    };
+  }
+  if (status === 415) {
+    return {
+      statusCode: 415,
+      code: 'INVALID_REQUEST',
+      reason: 'request_body_malformed',
+      message: 'The request content type is not supported.',
+    };
+  }
+  // Every content-type-parser failure is a malformed or unreadable body:
+  // FST_ERR_CTP_INVALID_JSON_BODY, FST_ERR_CTP_EMPTY_JSON_BODY, and the rest.
+  // Matched by family rather than by one literal, because the exact code has
+  // changed across Fastify versions and the classification has not.
+  if (typeof fastifyCode === 'string' && fastifyCode.startsWith('FST_ERR_CTP_')) {
+    return {
+      statusCode: status,
+      code: 'INVALID_REQUEST',
+      reason: 'request_body_malformed',
+      message: 'The request body could not be read.',
+    };
+  }
+  return {
+    statusCode: status,
+    code: 'INVALID_REQUEST',
+    reason: 'request_validation_failed',
+    message: 'The request is invalid.',
+  };
 }
 
 /**

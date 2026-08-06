@@ -1,5 +1,9 @@
 export type ServiceErrorCode =
   | 'UNAUTHENTICATED'
+  // Reserved, not produced. A resource outside the caller's scope is a 404, so
+  // that the caller is not told something exists which they may not see — which
+  // leaves no situation that yields a 403. Kept declared because removing an
+  // enum member is the one change the /v2 compatibility policy forbids.
   | 'FORBIDDEN'
   | 'POST_NOT_FOUND'
   | 'COMMENT_NOT_FOUND'
@@ -12,6 +16,7 @@ export type ServiceErrorCode =
   | 'PROVIDER_UNAVAILABLE'
   | 'INVALID_CURSOR'
   | 'INVALID_REQUEST'
+  | 'ROUTE_NOT_FOUND'
   | 'INTERNAL_ERROR';
 
 /**
@@ -29,6 +34,7 @@ export type ServiceErrorCode =
  */
 export const serviceErrorReasons = [
   'missing_account_context',
+  /** Reserved alongside `FORBIDDEN`; see the note on that code. */
   'account_not_permitted',
   'post_not_found',
   'comment_not_found',
@@ -47,6 +53,12 @@ export const serviceErrorReasons = [
   'cursor_not_issued_by_service',
   'request_validation_failed',
   'idempotency_key_missing',
+  // Transport-level refusals. Separate from `request_validation_failed`
+  // because the client action differs: shrink the body, or fix the encoding,
+  // rather than fix a field (Spec-022).
+  'request_body_too_large',
+  'request_body_malformed',
+  'route_not_found',
   'reply_not_stored',
   'internal_error',
 ] as const;

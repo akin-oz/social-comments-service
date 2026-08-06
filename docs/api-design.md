@@ -23,6 +23,10 @@ Per assumption A-001 the surrounding platform authenticates callers and supplies
 
 The header is trusted because it is expected to arrive from an internal gateway that has already authenticated the caller. Exposing this service directly to untrusted clients would require a real credential check in front of it; that boundary belongs to the platform, not to the comment service.
 
+**`X-Request-Id` is not trusted, and is ignored.** The service generates its own correlation identifier and returns it as `error.requestId` (Spec-022). It previously honoured the header verbatim, which meant the identifier an operator reconstructs a request by was chosen by the caller: unbounded in length, and freely collidable with another request's. Correlating across systems is the gateway's job, and it can do it without handing the choice to whoever is calling.
+
+**The request body is limited to 64 KB.** The largest documented body is a 10,000-character reply; Fastify's 1 MB default was a hundredfold of parse work the contract never asked for. Over the limit is `413`, not a service failure.
+
 ## GET `/v2/posts/{postId}/comments`
 
 Retrieves comments for a published post.
@@ -160,28 +164,29 @@ All errors use one stable envelope:
 
 Expected mappings include:
 
-| Status | Code examples                                    | Meaning                                                |
-| ------ | ------------------------------------------------ | ------------------------------------------------------ |
-| `400`  | `INVALID_REQUEST`, `INVALID_CURSOR`              | Request cannot be parsed or validated.                 |
-| `401`  | `UNAUTHENTICATED`                                | Caller credentials are missing or invalid.             |
-| `404`  | `POST_NOT_FOUND`, `COMMENT_NOT_FOUND`            | Resource is not visible in the caller’s scope.         |
-| `409`  | `IDEMPOTENCY_CONFLICT`, `REPLY_OUTCOME_UNKNOWN`  | The idempotency key cannot be honoured.                |
-| `422`  | `UNSUPPORTED_CAPABILITY`, `REPLY_DEPTH_EXCEEDED` | Well formed, but cannot be performed on this resource. |
-| `429`  | `PROVIDER_RATE_LIMITED`                          | Provider or service rate limit was reached.            |
-| `502`  | `PROVIDER_ERROR`                                 | Provider returned an upstream failure.                 |
-| `503`  | `PROVIDER_UNAVAILABLE`                           | Provider is temporarily unavailable.                   |
-| `500`  | `INTERNAL_ERROR`                                 | Unexpected failure inside the service.                 |
+| Status | Code examples                                            | Meaning                                                             |
+| ------ | -------------------------------------------------------- | ------------------------------------------------------------------- |
+| `400`  | `INVALID_REQUEST`, `INVALID_CURSOR`                      | Request cannot be parsed or validated.                              |
+| `401`  | `UNAUTHENTICATED`                                        | Caller credentials are missing or invalid.                          |
+| `404`  | `POST_NOT_FOUND`, `COMMENT_NOT_FOUND`, `ROUTE_NOT_FOUND` | Resource is not visible in the caller’s scope, or no route matched. |
+| `409`  | `IDEMPOTENCY_CONFLICT`, `REPLY_OUTCOME_UNKNOWN`          | The idempotency key cannot be honoured.                             |
+| `422`  | `UNSUPPORTED_CAPABILITY`, `REPLY_DEPTH_EXCEEDED`         | Well formed, but cannot be performed on this resource.              |
+| `413`  | `INVALID_REQUEST`                                        | The request body is larger than the service accepts.                |
+| `415`  | `INVALID_REQUEST`                                        | The request content type is not supported.                          |
+| `429`  | `PROVIDER_RATE_LIMITED`                                  | Provider or service rate limit was reached.                         |
+| `502`  | `PROVIDER_ERROR`                                         | Provider returned an upstream failure.                              |
+| `503`  | `PROVIDER_UNAVAILABLE`                                   | Provider is temporarily unavailable.                                |
+| `500`  | `INTERNAL_ERROR`                                         | Unexpected failure inside the service.                              |
 
 A `429` response carries `Retry-After` whenever the provider supplied that guidance.
 
-A resource belonging to another tenant is `404`, not `403`: the caller is not told that something exists which they may not see.
+A resource belonging to another tenant is `404`, not `403`: the caller is not told that something exists which they may not see. That rule is why **`FORBIDDEN` has no producer and no documented status** — every authorisation failure is either a `401` for missing context or a `404` for a resource outside the caller's scope. The code and its reason remain declared in the schema, reserved rather than live, because removing an enum member is the one change the `/v2` compatibility policy below does not permit.
 
 ### What each reason asks you to do
 
 | Code                     | Reason                          | Do this                                                              |
 | ------------------------ | ------------------------------- | -------------------------------------------------------------------- |
 | `UNAUTHENTICATED`        | `missing_account_context`       | Fix the caller: supply a valid `X-Account-Id`.                       |
-| `FORBIDDEN`              | `account_not_permitted`         | Fix the caller.                                                      |
 | `POST_NOT_FOUND`         | `post_not_found`                | Fix the request; the post is not visible in your scope.              |
 | `COMMENT_NOT_FOUND`      | `comment_not_found`             | List the post's comments first, then reply to an identifier from it. |
 | `IDEMPOTENCY_CONFLICT`   | `idempotency_key_body_mismatch` | Fix the caller. Reusing a key for a different body is a bug.         |

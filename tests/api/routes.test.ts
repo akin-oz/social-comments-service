@@ -43,6 +43,23 @@ function rateLimitedApp(retryAfterMs: number) {
   });
 }
 
+/** Records what the composition logs, so level rules can be asserted. */
+function captureLogs(
+  app: ReturnType<typeof createDemoApplication>,
+  into: { level: string; fields: Record<string, unknown> }[],
+): void {
+  for (const level of ['warn', 'error'] as const) {
+    const original = app.log[level].bind(app.log);
+    Object.defineProperty(app.log, level, {
+      configurable: true,
+      value: (fields: Record<string, unknown>, message: string) => {
+        if (typeof fields === 'object') into.push({ level, fields });
+        return original(fields as never, message as never);
+      },
+    });
+  }
+}
+
 async function listComments(
   app: ReturnType<typeof createDemoApplication>,
   query = 'limit=10',
@@ -273,6 +290,104 @@ describe('comment REST API', () => {
     expect(rejection?.level).toBe('warn');
     expect(rejection?.fields).toMatchObject({ code: 'INVALID_CURSOR', statusCode: 400 });
     expect(records.some((record) => record.level === 'error')).toBe(false);
+    await app.close();
+  });
+
+  it('answers an oversized body as a client error, not a service failure', async () => {
+    // The handler checked validation, then DomainValidationError, then
+    // ServiceError, then fell through to INTERNAL_ERROR with a stack at error
+    // level — for something the client did. Anyone with a valid account header
+    // could raise a page-worthy signal at will (Spec-022).
+    const records: { level: string; fields: Record<string, unknown> }[] = [];
+    const app = createDemoApplication({ logger: false });
+    captureLogs(app, records);
+    const { body } = await listComments(app);
+    const commentId = body.data[0]?.id ?? '';
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/v2/comments/${commentId}/replies`,
+      headers: { ...auth, 'idempotency-key': 'oversized-1' },
+      payload: { body: 'x'.repeat(200_000) },
+    });
+
+    expect(response.statusCode).toBe(413);
+    expect(response.json()).toMatchObject({
+      error: { code: 'INVALID_REQUEST', reason: 'request_body_too_large' },
+    });
+    expect(records.some((record) => record.level === 'error')).toBe(false);
+    expect(records.find((record) => record.fields.event === 'http.request.rejected')?.level).toBe(
+      'warn',
+    );
+    await app.close();
+  });
+
+  it('answers malformed JSON as a client error, not a service failure', async () => {
+    const records: { level: string; fields: Record<string, unknown> }[] = [];
+    const app = createDemoApplication({ logger: false });
+    captureLogs(app, records);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/v2/comments/${crypto.randomUUID()}/replies`,
+      headers: { ...auth, 'idempotency-key': 'malformed-1', 'content-type': 'application/json' },
+      payload: '{"body": ',
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: { code: 'INVALID_REQUEST', reason: 'request_body_malformed' },
+    });
+    expect(records.some((record) => record.level === 'error')).toBe(false);
+    await app.close();
+  });
+
+  it('answers an unknown route in the documented envelope', async () => {
+    // Fastify's default 404 has its own shape and names the framework.
+    const app = createDemoApplication({ logger: false });
+
+    const response = await app.inject({ method: 'GET', url: '/v2/nope', headers: auth });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({
+      error: {
+        code: 'ROUTE_NOT_FOUND',
+        reason: 'route_not_found',
+        message: expect.any(String),
+        requestId: expect.any(String),
+      },
+    });
+    await app.close();
+  });
+
+  it('ignores a caller-supplied request identifier', async () => {
+    // It flowed unbounded into every log record and every error body, so the
+    // identifier an operator correlates by was attacker-chosen: two unrelated
+    // requests could be given one id.
+    const forged = 'f'.repeat(229);
+    const app = createDemoApplication({ logger: false });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/v2/posts/${demoPost.id}/comments`,
+      headers: { 'x-request-id': forged },
+    });
+
+    const requestId = response.json().error.requestId as string;
+    expect(requestId).not.toBe(forged);
+    expect(requestId).not.toContain('ffff');
+    expect(requestId.length).toBeLessThan(64);
+    await app.close();
+  });
+
+  it('gives two requests two different identifiers even when told otherwise', async () => {
+    const app = createDemoApplication({ logger: false });
+    const forged = { 'x-request-id': 'the-same-id-for-both' };
+
+    const first = await app.inject({ method: 'GET', url: '/v2/nope', headers: forged });
+    const second = await app.inject({ method: 'GET', url: '/v2/nope', headers: forged });
+
+    expect(first.json().error.requestId).not.toBe(second.json().error.requestId);
     await app.close();
   });
 

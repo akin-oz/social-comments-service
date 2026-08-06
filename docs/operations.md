@@ -85,6 +85,8 @@ The ratio of `comments.list.hydrated` to `comments.list.served_from_cache` is th
 
 A rejected client request is logged at warn, never error. Reserving error for failures the service did not anticipate keeps the level meaningful for alerting.
 
+That rule used to be aspirational at the transport layer. An oversized body or malformed JSON is a Fastify error rather than a `ServiceError`, so it fell through to `INTERNAL_ERROR` with a stack trace at error level — a page-worthy signal anyone with a valid account header could raise at will. The handler now reads the status the framework attached and treats any sub-500 as the client error it is (Spec-022). It is asserted, not stated: a test injects both and fails if anything reaches error level.
+
 Logs never contain comment bodies, author display names, credentials, or provider tokens. Where content matters operationally the record carries a measurement instead, such as `bodyLength` or `fetched`. The client address and port are omitted, since behind an internal gateway they describe the gateway rather than the caller.
 
 `SNAPSHOT_LIFETIME_SECONDS` sets how long a completed snapshot is trusted before a read refreshes it, defaulting to 300. One read completes a post's stream, bounded at 20 provider calls per request, after which the caller is told there is more and the next request continues.
