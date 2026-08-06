@@ -82,6 +82,70 @@ describe('in-memory comment repository', () => {
     });
   });
 
+  it('breaks a keyset tie on id when comments share a timestamp', async () => {
+    // Replacing the id branch of compareKeyset with `return 0` left the suite
+    // green, because no fixture held two comments at one timestamp. Paging in
+    // ones through a tie must still reach every comment exactly once (Spec-020).
+    const tie = '2026-08-01T20:30:00.000Z';
+    const comments = new InMemoryCommentRepository(
+      [observedComment('tie-a', tie), observedComment('tie-b', tie), observedComment('tie-c', tie)],
+      tenant.accountId,
+    );
+
+    const ids = await storedIds(comments);
+    expect(ids).toHaveLength(3);
+
+    const walked: string[] = [];
+    let after: { publishedAt: string; id: string } | undefined;
+    for (let guard = 0; guard < 10; guard += 1) {
+      const page = await comments.listByPost(tenant, {
+        ...listQuery,
+        limit: 1,
+        ...(after === undefined ? {} : { after }),
+      });
+      walked.push(...page.items.map((item) => item.id));
+      const last = page.items[page.items.length - 1];
+      if (!page.hasMore || last === undefined) break;
+      after = { publishedAt: last.publishedAt, id: last.id };
+    }
+
+    expect([...walked].sort()).toEqual([...ids].sort());
+  });
+
+  it('does not resolve a reply that lives on a different post than its sibling', async () => {
+    // The SQL twin of this guard has a killing test; the in-memory one did not.
+    // The post stands in for the connection here (one post, one connection), so
+    // a reply identifier that resolves to a row on another post must not be
+    // returned for this sibling — deleting the postId half of the guard let it
+    // through (Spec-024).
+    const comments = new InMemoryCommentRepository([], tenant.accountId);
+    const [siblingOnPostA] = await comments.upsertMany(tenant, [
+      { ...observedComment('sibling-a', '2026-08-01T10:00:00.000Z') },
+    ]);
+    await comments.upsertMany(tenant, [
+      { ...observedComment('reply-on-post-b', '2026-08-01T11:05:00.000Z'), postId: 'post-2' },
+    ]);
+
+    // The reply row exists, but it is on post-2 while the sibling is on post.id.
+    const resolved = await comments.findReplyByExternalId(
+      tenant,
+      siblingOnPostA!.id,
+      'reply-on-post-b',
+    );
+    expect(resolved).toBeNull();
+
+    // A reply on the sibling's own post does resolve.
+    await comments.upsertMany(tenant, [
+      { ...observedComment('reply-on-post-a', '2026-08-01T10:30:00.000Z') },
+    ]);
+    const onSamePost = await comments.findReplyByExternalId(
+      tenant,
+      siblingOnPostA!.id,
+      'reply-on-post-a',
+    );
+    expect(onSamePost?.postId).toBe(post.id);
+  });
+
   it('walks pages in keyset order without repeating or skipping', async () => {
     const comments = repository();
 
