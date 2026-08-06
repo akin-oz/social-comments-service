@@ -188,6 +188,43 @@ describe('in-memory reply operation repository', () => {
     });
   });
 
+  it('lets only the first recoverer resolve an abandoned operation', async () => {
+    // The SQL twin of this guard has a killing test, the in-memory one did not,
+    // and 36 of 167 tests skip without a database — so the adapter presented as
+    // a first-class alternative could drift from the lifecycle contract and
+    // nobody running `pnpm test` would know (Spec-020).
+    const operations = new InMemoryReplyOperationRepository();
+    await operations.claim(tenant, operation);
+
+    const first = await operations.markUnknown(tenant, operation.id, 'REPLY_OUTCOME_UNKNOWN');
+    const second = await operations.markUnknown(tenant, operation.id, 'REPLY_OUTCOME_UNKNOWN');
+
+    expect(first).toMatchObject({ status: 'unknown', failureCode: 'REPLY_OUTCOME_UNKNOWN' });
+    expect(second).toBeNull();
+  });
+
+  it('refuses to mark a completed operation unknown', async () => {
+    const operations = new InMemoryReplyOperationRepository();
+    await operations.claim(tenant, operation);
+    await operations.complete(tenant, operation.id, crypto.randomUUID());
+
+    await expect(
+      operations.markUnknown(tenant, operation.id, 'REPLY_OUTCOME_UNKNOWN'),
+    ).resolves.toBeNull();
+    await expect(
+      operations.findByIdempotencyKey(tenant, operation.idempotencyKey),
+    ).resolves.toMatchObject({ status: 'completed' });
+  });
+
+  it('records the provider reply identifier without resolving the operation', async () => {
+    const operations = new InMemoryReplyOperationRepository();
+    await operations.claim(tenant, operation);
+
+    const recorded = await operations.recordPublished(tenant, operation.id, 'ig-reply-7');
+
+    expect(recorded).toMatchObject({ externalReplyId: 'ig-reply-7', status: 'pending' });
+  });
+
   it('records terminal outcomes with a completion timestamp', async () => {
     const operations = new InMemoryReplyOperationRepository();
     await operations.claim(tenant, operation);

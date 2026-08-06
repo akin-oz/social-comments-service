@@ -154,9 +154,3 @@ export function toFailureCode(error: unknown): ServiceErrorCode {
   if (error instanceof ServiceError) return error.code;
   return 'PROVIDER_ERROR';
 }
-
-/** The reason to report for a failure that carries none of its own. */
-export function toFailureReason(error: unknown): ServiceErrorReason {
-  if (error instanceof ServiceError) return error.reason;
-  return 'provider_upstream_error';
-}

@@ -71,6 +71,15 @@ describe('provider call policy', () => {
     expect(parseRetryAfter('not-a-delay', now)).toBeNull();
   });
 
+  it('refuses a negative delay and a date already in the past', () => {
+    // A provider that sends a nonsense Retry-After must not produce a negative
+    // sleep or a negative header value.
+    const now = Date.parse('2026-08-01T10:00:00.000Z');
+    expect(parseRetryAfter('-30', now)).toBeNull();
+    // An HTTP-date in the past clamps to zero rather than going negative.
+    expect(parseRetryAfter('Sat, 01 Aug 2026 09:59:30 GMT', now)).toBe(0);
+  });
+
   it('keeps a bounded default budget for real providers', () => {
     expect(providerRetryPolicy.timeoutMs).toBeGreaterThan(0);
     expect(providerRetryPolicy.maxAttempts).toBeGreaterThan(1);

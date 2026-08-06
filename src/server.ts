@@ -1,4 +1,5 @@
 import {
+  chooseComposition,
   createDemoApplication,
   createPostgresApplication,
   demoAccountId,
@@ -8,25 +9,23 @@ import type { Database } from './repositories/database.js';
 
 const port = Number.parseInt(process.env.PORT ?? '3000', 10);
 const host = process.env.HOST ?? '0.0.0.0';
-const databaseUrl = process.env.DATABASE_URL;
 
-// Falling back to the demo composition in production would start a service
-// that passes its health check, accepts any account, and has no row-level
-// security behind it. A missing or misspelled DATABASE_URL must stop the
-// process, not silently downgrade it.
-if (databaseUrl === undefined && process.env.NODE_ENV === 'production') {
-  process.stderr.write(
-    'DATABASE_URL is required when NODE_ENV=production: refusing to start the in-memory composition.\n',
-  );
+// The rule itself lives in index.ts so a test can reach it; this is only the
+// part that has to touch the process.
+const choice = chooseComposition(process.env);
+if (choice.kind === 'refuse') {
+  process.stderr.write(`${choice.reason}\n`);
   process.exit(1);
 }
 
 // With DATABASE_URL the service runs on PostgreSQL; without it, on in-memory
 // repositories so the demo needs nothing installed. Either way the provider is
 // the deterministic fixture, since no live platform SDK is selected.
-const composed = databaseUrl
-  ? createPostgresApplication(databaseUrl)
-  : { application: createDemoApplication(), database: undefined as Database | undefined };
+const databaseUrl = choice.kind === 'postgres' ? choice.databaseUrl : undefined;
+const composed =
+  choice.kind === 'postgres'
+    ? createPostgresApplication(choice.databaseUrl)
+    : { application: createDemoApplication(), database: undefined as Database | undefined };
 
 const { application, database } = composed;
 
@@ -56,7 +55,18 @@ application
     );
   })
   .catch((error: unknown) => {
-    application.log.error({ event: 'service.start_failed', err: error }, 'service.start_failed');
+    // Shape only, like every other error record (ADR-0011). `err: error` hands
+    // the serializer an arbitrary object; a listen failure carries the address
+    // and port it tried, which is the one place a config value could leak.
+    application.log.error(
+      {
+        event: 'service.start_failed',
+        errorName: error instanceof Error ? error.name : 'unknown',
+        errorMessage: error instanceof Error ? error.message : undefined,
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'service.start_failed',
+    );
     process.exitCode = 1;
   });
 

@@ -463,8 +463,17 @@ export class CommentService {
     return stored;
   }
 
+  /**
+   * Key for the in-flight map. The delimiter is written as an escape rather
+   * than as a literal control character: a raw NUL byte in the source makes git
+   * and grep classify this file as binary, which silently excludes the largest
+   * file in the repository from every text search, including secret scans over
+   * `git log -p`. NUL is still the right delimiter — it cannot occur in an
+   * account identifier or a post identifier, so the key cannot be forged by
+   * one value ending where the next begins.
+   */
   private postKey(context: RequestContext, postId: string): string {
-    return `${context.accountId} ${postId}`;
+    return `${context.accountId}\u0000${postId}`;
   }
 
   /** Whether this request would read the provider if nothing else were. */

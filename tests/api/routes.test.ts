@@ -16,6 +16,33 @@ import { providerPolicies, providerRetryPolicy } from '../../src/shared/observab
 
 const auth = { 'x-account-id': demoAccountId };
 
+/** A composition whose provider always rate limits, with the given guidance. */
+function rateLimitedApp(retryAfterMs: number) {
+  return createApplication({
+    logger: false,
+    posts: new InMemoryPostRepository([demoPost]),
+    comments: new InMemoryCommentRepository([], demoAccountId),
+    providers: new Map([
+      [
+        'instagram' as const,
+        new AdaptiveProviderAdapter(
+          'instagram',
+          {
+            listComments: async () => {
+              throw new ProviderRateLimitError('Too many requests.', retryAfterMs);
+            },
+            replyToComment: async () => {
+              throw new Error('not used');
+            },
+          },
+          new Set(['list_comments']),
+          providerPolicies({ ...providerRetryPolicy, maxAttempts: 1 }),
+        ),
+      ],
+    ]),
+  });
+}
+
 async function listComments(
   app: ReturnType<typeof createDemoApplication>,
   query = 'limit=10',
@@ -154,29 +181,7 @@ describe('comment REST API', () => {
   it('sends Retry-After when the provider supplied that guidance', async () => {
     // Described in prose since the first version and never asserted on a
     // response, so nothing would have caught it disappearing.
-    const app = createApplication({
-      logger: false,
-      posts: new InMemoryPostRepository([demoPost]),
-      comments: new InMemoryCommentRepository([], demoAccountId),
-      providers: new Map([
-        [
-          'instagram' as const,
-          new AdaptiveProviderAdapter(
-            'instagram',
-            {
-              listComments: async () => {
-                throw new ProviderRateLimitError('Too many requests.', 45_000);
-              },
-              replyToComment: async () => {
-                throw new Error('not used');
-              },
-            },
-            new Set(['list_comments']),
-            providerPolicies({ ...providerRetryPolicy, maxAttempts: 1 }),
-          ),
-        ],
-      ]),
-    });
+    const app = rateLimitedApp(45_000);
 
     const response = await app.inject({
       method: 'GET',
@@ -189,6 +194,85 @@ describe('comment REST API', () => {
     expect(response.json()).toMatchObject({
       error: { code: 'PROVIDER_RATE_LIMITED', reason: 'provider_rate_limited' },
     });
+    await app.close();
+  });
+
+  it('rounds Retry-After up, so a client never retries too early', async () => {
+    // 1500 ms must become 2 seconds, not 1. Rounding down tells the client to
+    // come back while the provider is still refusing.
+    const app = rateLimitedApp(1_500);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/v2/posts/${demoPost.id}/comments`,
+      headers: auth,
+    });
+
+    expect(response.headers['retry-after']).toBe('2');
+    await app.close();
+  });
+
+  it('names a reason on both routes to a 400, not only the status', async () => {
+    // Two different guards produce a 400 here and they are not the same
+    // situation. An absent header fails the route schema, which is generic
+    // request validation. A header that is present but blank reaches the
+    // handler, which knows exactly what is wrong. Only asserting "400" hid
+    // that the two reasons differ (Spec-020).
+    const app = createDemoApplication({ logger: false });
+    const { body } = await listComments(app);
+    const commentId = body.data[0]?.id ?? '';
+
+    const absent = await app.inject({
+      method: 'POST',
+      url: `/v2/comments/${commentId}/replies`,
+      headers: auth,
+      payload: { body: 'Thanks!' },
+    });
+    const blank = await app.inject({
+      method: 'POST',
+      url: `/v2/comments/${commentId}/replies`,
+      headers: { ...auth, 'idempotency-key': '   ' },
+      payload: { body: 'Thanks!' },
+    });
+
+    expect(absent.statusCode).toBe(400);
+    expect(absent.json()).toMatchObject({
+      error: { code: 'INVALID_REQUEST', reason: 'request_validation_failed' },
+    });
+    expect(blank.statusCode).toBe(400);
+    expect(blank.json()).toMatchObject({
+      error: { code: 'INVALID_REQUEST', reason: 'idempotency_key_missing' },
+    });
+    await app.close();
+  });
+
+  it('logs a refused client request at warn and a service failure at error', async () => {
+    // operations.md promises that a rejected client request is logged at warn,
+    // never error, so that error stays meaningful for alerting. Nothing
+    // asserted the split (Spec-020).
+    const records: { level: string; fields: Record<string, unknown> }[] = [];
+    const app = createDemoApplication({ logger: false });
+    for (const level of ['warn', 'error'] as const) {
+      const original = app.log[level].bind(app.log);
+      Object.defineProperty(app.log, level, {
+        configurable: true,
+        value: (fields: Record<string, unknown>, message: string) => {
+          if (typeof fields === 'object') records.push({ level, fields });
+          return original(fields as never, message as never);
+        },
+      });
+    }
+
+    await app.inject({
+      method: 'GET',
+      url: `/v2/posts/${demoPost.id}/comments?cursor=tampered`,
+      headers: auth,
+    });
+
+    const rejection = records.find((record) => record.fields.event === 'http.request.rejected');
+    expect(rejection?.level).toBe('warn');
+    expect(rejection?.fields).toMatchObject({ code: 'INVALID_CURSOR', statusCode: 400 });
+    expect(records.some((record) => record.level === 'error')).toBe(false);
     await app.close();
   });
 

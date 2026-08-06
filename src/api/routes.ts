@@ -54,25 +54,15 @@ function serializeComment(comment: Comment) {
   };
 }
 
-/**
- * Paths that carry no tenant data and therefore no account context: the process
- * health probe and the API documentation (Spec-011).
- */
-function isPublicPath(url: string): boolean {
-  const path = url.split('?')[0] ?? '';
-  return (
-    path === '/health' ||
-    path === '/openapi.json' ||
-    path === '/documentation' ||
-    path.startsWith('/documentation/')
-  );
-}
-
 export function registerCommentRoutes(app: FastifyInstance, service: CommentService): void {
   for (const schema of sharedSchemas) app.addSchema(schema);
 
+  // Scoped to this plugin, which holds only the two /v2 routes. The health
+  // probe and the documentation endpoints are registered on the root instance
+  // and never reach this hook, so it carries no exemption list: an allowlist
+  // that exempts nothing today is a bypass shape waiting for someone to add a
+  // route inside this plugin. Every route here requires an account context.
   app.addHook('onRequest', async (request: FastifyRequest, reply) => {
-    if (isPublicPath(request.url)) return;
     const accountId = request.headers['x-account-id'];
     if (typeof accountId !== 'string' || !isUuid(accountId)) {
       request.log.warn(

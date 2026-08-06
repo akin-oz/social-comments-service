@@ -14,6 +14,40 @@ export interface SeedTenant {
 }
 
 /**
+ * A second connection on the same platform for tenant A.
+ *
+ * Every seed tenant had exactly one social account, which made the parent-join
+ * predicate `parent.social_account_id = c.social_account_id` unreachable: with
+ * one connection per tenant it can never exclude anything, so dropping it left
+ * the suite green while a real deployment would fan out the left join and
+ * duplicate comments in a page. One connection is an unusual shape for an
+ * agency product; two is the ordinary one (Spec-020).
+ */
+export interface SeedConnection {
+  label: string;
+  accountId: string;
+  socialAccountId: string;
+  platform: Platform;
+  externalAccountId: string;
+  credentialReference: string;
+  postId: string;
+  externalPostId: string;
+  publishedAt: string;
+}
+
+export const seedSecondConnection: SeedConnection = {
+  label: 'tenant A, second Instagram connection',
+  accountId: '2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b001',
+  socialAccountId: '2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b021',
+  platform: 'instagram',
+  externalAccountId: 'ig-account-a2',
+  credentialReference: 'secret://social/instagram/tenant-a-second',
+  postId: '2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b022',
+  externalPostId: 'ig-post-3',
+  publishedAt: '2026-08-01T09:15:00.000Z',
+};
+
+/**
  * Fixed identifiers shared by the seed, the PostgreSQL composition, the README,
  * and the isolation tests, so every one of them refers to the same rows.
  *

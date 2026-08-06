@@ -9,7 +9,7 @@ import {
   PostgresPostRepository,
   PostgresReplyOperationRepository,
 } from '../../src/repositories/postgres.js';
-import { seedTenants } from '../../src/seed-data.js';
+import { seedSecondConnection, seedTenants } from '../../src/seed-data.js';
 import type { ObservedComment, TenantContext } from '../../src/shared/types.js';
 import type { CommentPage } from '../../src/comments/contracts.js';
 
@@ -50,12 +50,35 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
   /** Identities the database assigned, captured for tests that need one. */
   let storedA: readonly string[] = [];
   let storedB: readonly string[] = [];
+  /**
+   * A post created fresh for this run.
+   *
+   * Tests that assert an exact row count cannot use the seeded post: rows
+   * accumulate across runs against a persistent compose stack, and two such
+   * tests were demonstrated failing after roughly fifty local runs while their
+   * own comments claimed re-runnability. CI never saw it because CI is always
+   * fresh (Spec-020).
+   */
+  let scratchPostId = '';
 
   beforeAll(async () => {
     database = new PostgresDatabase(appUrl!);
     comments = new PostgresCommentRepository(database);
     posts = new PostgresPostRepository(database);
     operations = new PostgresReplyOperationRepository(database);
+
+    scratchPostId = crypto.randomUUID();
+    const owner = new Client({ connectionString: ownerUrl });
+    await owner.connect();
+    try {
+      await owner.query(
+        `insert into posts (id, account_id, social_account_id, external_post_id, status, published_at)
+         values ($1, $2, $3, $4, 'published', now())`,
+        [scratchPostId, tenantA.accountId, tenantA.socialAccountId, `scratch-${scratchPostId}`],
+      );
+    } finally {
+      await owner.end();
+    }
 
     storedA = (
       await comments.upsertMany(contextA, [
@@ -69,6 +92,22 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
         comment(tenantB, 'b-comment-1', '2026-08-01T10:30:00.000Z'),
       ])
     ).map((item) => item.id);
+    // Tenant B needs a reply operation to exist for the predicate-removed proof
+    // to mean anything on that table: on a fresh database the count was zero
+    // whether the policy worked or not, and CI is always fresh (Spec-020).
+    await operations.claim(contextB, {
+      id: crypto.randomUUID(),
+      commentId: storedB[0]!,
+      idempotencyKey: `tenant-b-visible-${crypto.randomUUID()}`,
+      requestFingerprint: 'fingerprint',
+      status: 'pending',
+      resultingCommentId: null,
+      failureCode: null,
+      leaseExpiresAt: new Date(Date.now() + 600_000).toISOString(),
+      externalReplyId: null,
+      createdAt: new Date().toISOString(),
+      completedAt: null,
+    });
   });
 
   afterAll(async () => {
@@ -214,12 +253,36 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
   });
 
   it('returns comments in keyset order and pages without repeating', async () => {
-    const query = { postId: tenantA.postId, platform: tenantA.platform } as const;
+    // A post created for this run, not the seeded one. Against a persistent
+    // compose stack the seeded post accumulates rows until `limit: 500` starts
+    // reporting hasMore, and this test failed at 537 rows despite claiming
+    // re-runnability (Spec-020).
+    const query = { postId: scratchPostId, platform: tenantA.platform } as const;
+    await comments.upsertMany(contextA, [
+      {
+        ...comment(tenantA, `walk-1-${scratchPostId}`, '2026-08-01T10:00:00.000Z'),
+        postId: scratchPostId,
+      },
+      {
+        ...comment(tenantA, `walk-2-${scratchPostId}`, '2026-08-01T11:00:00.000Z'),
+        postId: scratchPostId,
+      },
+      {
+        ...comment(tenantA, `walk-3-${scratchPostId}`, '2026-08-01T12:00:00.000Z'),
+        postId: scratchPostId,
+      },
+      {
+        ...comment(tenantA, `walk-4-${scratchPostId}`, '2026-08-01T13:00:00.000Z'),
+        postId: scratchPostId,
+      },
+      {
+        ...comment(tenantA, `walk-5-${scratchPostId}`, '2026-08-01T14:00:00.000Z'),
+        postId: scratchPostId,
+      },
+    ]);
 
-    // Expectations come from the data actually present, so the test holds
-    // against a database that already carries rows from earlier runs.
     const everything = await comments.listByPost(contextA, { ...query, limit: 500 });
-    expect(everything.items.length).toBeGreaterThan(2);
+    expect(everything.items).toHaveLength(5);
     expect(everything.hasMore).toBe(false);
 
     const walked: string[] = [];
@@ -358,6 +421,10 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     const owner = new Client({ connectionString: ownerUrl });
     await owner.connect();
     try {
+      // Cluster-wide and visible to every other connection for as long as it
+      // lasts. `fileParallelism: false` keeps the other database-backed file
+      // from probing isolation during this window, and the finally block below
+      // restores the role whatever happens.
       await owner.query('alter role comments_app superuser bypassrls');
       const drifted = await owner.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
         `select rolsuper, rolbypassrls from pg_roles where rolname = 'comments_app'`,
@@ -552,8 +619,13 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
       limit: 50,
     });
 
-    expect(onYoutube.items.map((item) => item.id)).toContain(stored!.id);
+    // Resolved by identity rather than by scanning a page, so an accumulated
+    // database cannot push the new row past the limit (Spec-020).
+    await expect(comments.findById(contextC, stored!.id)).resolves.toMatchObject({
+      platform: 'youtube',
+    });
     expect(onYoutube.items.every((item) => item.platform === 'youtube')).toBe(true);
+    expect(onYoutube.items.length).toBeGreaterThan(0);
     expect(onInstagram.items).toEqual([]);
   });
 
@@ -663,20 +735,217 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
   });
 
   it('keeps the tenant setting out of the pooled connection', async () => {
-    await database.withTenant(tenantA.accountId, async (tx) => {
-      const inside = await tx.query<{ value: string }>(
-        `select current_setting('app.account_id', true) as value`,
+    // `max: 1` forces the second checkout onto the same physical connection the
+    // first used. The earlier version of this test asserted on a brand-new
+    // pg.Client, which has never had set_config called and is therefore empty
+    // whatever the code does: flipping set_config's `is_local` flag to false —
+    // real cross-request tenant carry-over — left it green (Spec-020).
+    const pooled = new PostgresDatabase({ connectionString: appUrl!, max: 1 });
+    try {
+      const seen = await pooled.withTenant(
+        tenantA.accountId,
+        async (tx) =>
+          (
+            await tx.query<{ value: string }>(
+              `select current_setting('app.account_id', true) as value`,
+            )
+          ).rows[0]!.value,
       );
-      expect(inside.rows[0]!.value).toBe(tenantA.accountId);
-    });
+      expect(seen).toBe(tenantA.accountId);
 
-    // Transaction-local scope means the next checkout starts with no tenant.
-    const owner = new Client({ connectionString: ownerUrl! });
+      // Same connection, outside any transaction this time.
+      const after = await pooled.withTenant(
+        tenantB.accountId,
+        async (tx) =>
+          (await tx.query<{ pid: number }>(`select pg_backend_pid() as pid`)).rows[0]!.pid,
+      );
+      expect(after).toEqual(expect.any(Number));
+
+      const carried = await pooled.withTenant(
+        tenantB.accountId,
+        async (tx) =>
+          (
+            await tx.query<{ value: string }>(
+              `select current_setting('app.account_id', true) as value`,
+            )
+          ).rows[0]!.value,
+      );
+      // Tenant A's context must not survive into tenant B's transaction on the
+      // very same backend.
+      expect(carried).toBe(tenantB.accountId);
+      expect(carried).not.toBe(tenantA.accountId);
+    } finally {
+      await pooled.close();
+    }
+  });
+
+  it('scopes the tenant setting to the transaction, not the session', async () => {
+    // The distinction that matters is the `is_local` flag on set_config. With
+    // it false the value survives the commit and stays on the pooled backend
+    // for whatever runs next, which is cross-request tenant carry-over.
+    //
+    // withTenant re-sets the value at the start of every transaction, so the
+    // leak is invisible from inside one. Committing early through the session
+    // the port hands out puts the next statement outside any transaction on the
+    // same backend, which is precisely where a leaked value would show
+    // (Spec-020).
+    const pooled = new PostgresDatabase({ connectionString: appUrl!, max: 1 });
+    try {
+      const afterCommit = await pooled.withTenant(tenantA.accountId, async (tx) => {
+        const inside = await tx.query<{ value: string }>(
+          `select current_setting('app.account_id', true) as value`,
+        );
+        expect(inside.rows[0]!.value).toBe(tenantA.accountId);
+
+        await tx.query('commit');
+        const outside = await tx.query<{ value: string | null }>(
+          `select current_setting('app.account_id', true) as value`,
+        );
+        return outside.rows[0]!.value ?? '';
+      });
+
+      expect(afterCommit).toBe('');
+      expect(afterCommit).not.toBe(tenantA.accountId);
+    } finally {
+      await pooled.close();
+    }
+  });
+
+  it('does not carry a tenant setting out of a transaction on the same backend', async () => {
+    const pooled = new PostgresDatabase({ connectionString: appUrl!, max: 1 });
+    try {
+      const first = await pooled.withTenant(
+        tenantA.accountId,
+        async (tx) =>
+          (await tx.query<{ pid: number }>(`select pg_backend_pid() as pid`)).rows[0]!.pid,
+      );
+
+      // A raw read on the same pooled backend, with no transaction of its own.
+      // `set_config(..., true)` is transaction-local, so this must see nothing.
+      const leaked = await pooled.withTenant(tenantA.accountId, async () => undefined);
+      expect(leaked).toBeUndefined();
+
+      const second = await pooled.withTenant(tenantB.accountId, async (tx) => {
+        const row = await tx.query<{ pid: number; value: string }>(
+          `select pg_backend_pid() as pid, current_setting('app.account_id', true) as value`,
+        );
+        return row.rows[0]!;
+      });
+
+      // Proves the two ran on one backend, so the isolation above is real
+      // rather than an artefact of a fresh connection each time.
+      expect(second.pid).toBe(first);
+      expect(second.value).toBe(tenantB.accountId);
+    } finally {
+      await pooled.close();
+    }
+  });
+
+  it('rolls a failed batch back rather than committing its prefix', async () => {
+    // Replacing `rollback` with `commit` in withTenant survived the suite. A
+    // mid-batch upsert failure would then leave the rows written before the
+    // failure permanently stored (Spec-020).
+    const good = `rollback-good-${crypto.randomUUID()}`;
+
+    await expect(
+      comments.upsertMany(contextA, [
+        comment(tenantA, good, '2026-08-01T19:00:00.000Z'),
+        // Second item names another tenant's post: the insert selects no post
+        // row for this account, so upsertComment throws mid-batch.
+        { ...comment(tenantB, `rollback-bad-${crypto.randomUUID()}`, '2026-08-01T19:01:00.000Z') },
+      ]),
+    ).rejects.toThrow();
+
+    await expect(comments.findByExternalId(contextA, good)).resolves.toBeNull();
+  });
+
+  it('treats a malformed comment identifier as absent rather than a failed cast', async () => {
+    // The postId twin of this guard has a killing test; the comment sibling did
+    // not, so deleting `if (!isUuid(commentId)) return null` survived and a
+    // malformed path parameter reached a ::uuid cast as a 500 (Spec-020).
+    await expect(comments.findById(contextA, 'not-a-uuid')).resolves.toBeNull();
+    await expect(comments.resolveExternalId(contextA, 'not-a-uuid')).resolves.toBeNull();
+  });
+
+  it('treats a well-formed cursor holding a non-uuid position as absent', async () => {
+    // The existing negative test uses `cursor=tampered`, which dies at base64
+    // parse and never reaches the `$5::uuid` cast. This one is a structurally
+    // valid keyset whose id is not a UUID, which is the only input that gets
+    // that far.
+    await expect(
+      comments.listByPost(contextA, {
+        postId: tenantA.postId,
+        platform: tenantA.platform,
+        limit: 10,
+        after: { publishedAt: '2026-08-01T10:00:00.000Z', id: 'not-a-uuid' },
+      }),
+    ).resolves.toEqual({ items: [], hasMore: false });
+  });
+
+  it('scopes the parent join to one connection when a tenant has two', async () => {
+    // Every seed tenant had exactly one social account, so
+    // `parent.social_account_id = c.social_account_id` could never exclude
+    // anything and was removable with the suite green. With two connections the
+    // same provider comment id can exist under both, and without the predicate
+    // the left join fans out and duplicates the reply in the page (Spec-020).
+    const sharedParentExternal = `two-conn-parent-${crypto.randomUUID()}`;
+    const owner = new Client({ connectionString: ownerUrl });
     await owner.connect();
-    const leaked = await owner.query<{ value: string | null }>(
-      `select current_setting('app.account_id', true) as value`,
-    );
-    await owner.end();
-    expect(leaked.rows[0]!.value ?? '').toBe('');
+    try {
+      // The same provider identifier under each of tenant A's two connections.
+      for (const [socialAccountId, postId] of [
+        [tenantA.socialAccountId, tenantA.postId],
+        [seedSecondConnection.socialAccountId, seedSecondConnection.postId],
+      ] as const) {
+        await owner.query(
+          `insert into comments
+             (account_id, post_id, social_account_id, external_comment_id,
+              author_external_id, author_display_name, body, published_at, updated_at)
+           values ($1, $2, $3, $4, 'author', 'Ada Lovelace', 'parent', now(), now())
+           on conflict (social_account_id, external_comment_id) do nothing`,
+          [tenantA.accountId, postId, socialAccountId, sharedParentExternal],
+        );
+      }
+    } finally {
+      await owner.end();
+    }
+
+    const [reply] = await comments.upsertMany(contextA, [
+      {
+        ...comment(tenantA, `two-conn-reply-${crypto.randomUUID()}`, '2026-08-01T20:00:00.000Z'),
+        externalParentCommentId: sharedParentExternal,
+      },
+    ]);
+
+    // Exactly one parent, and it is the one on this reply's own connection.
+    // Resolved by social account directly: `findByExternalId` scopes only by
+    // account, so with two connections holding the same provider identifier it
+    // is ambiguous — which is recorded as its own finding rather than papered
+    // over here.
+    expect(reply).toBeDefined();
+    const expectedParent = await (async () => {
+      const client = new Client({ connectionString: ownerUrl });
+      await client.connect();
+      try {
+        const found = await client.query<{ id: string }>(
+          `select id from comments
+           where social_account_id = $1 and external_comment_id = $2`,
+          [tenantA.socialAccountId, sharedParentExternal],
+        );
+        return found.rows[0]!.id;
+      } finally {
+        await client.end();
+      }
+    })();
+    expect(reply!.parentCommentId).toBe(expectedParent);
+
+    // And the read-back does not duplicate the reply row.
+    const page = await comments.listByPost(contextA, {
+      postId: tenantA.postId,
+      platform: tenantA.platform,
+      limit: 500,
+    });
+    const occurrences = page.items.filter((item) => item.id === reply!.id);
+    expect(occurrences).toHaveLength(1);
   });
 });

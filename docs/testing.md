@@ -46,6 +46,12 @@ The integration suites skip without a database so the default run needs no Docke
 
 Some behaviour can only be observed against PostgreSQL: row-level security, the compare-and-set on snapshot state, the upsert's conflict clause, and every deletion rule. An in-memory version of those tests would pass for the wrong reason.
 
+## Two guards a test cannot kill, and why they stay
+
+`validatePagination` is called just before a list response is built. Removing the call kills no test, and no test can be written that kills it: the service constructs `hasMore` and `nextCursor` together from one expression, so it cannot produce the inconsistent pair the validator exists to reject. It is a defensive assertion against a future edit, not a reachable branch, and it is recorded here rather than deleted or given a test that only re-tests the validator in isolation.
+
+`validateComment` is called by nothing in `src/`. It is the executable statement of what a valid `Comment` is, exercised by `tests/comments/domain-model.test.ts`, and that is the whole of its current job. Wiring it into the repositories would turn a mapper defect into a typed failure rather than a malformed response — worth doing, a behaviour change, and therefore specified rather than slipped in.
+
 ## Assertions to avoid
 
 - **Computing an expectation with the function under test.** The test then asserts the function equals itself. Use a golden value, or read the result back through a different path.

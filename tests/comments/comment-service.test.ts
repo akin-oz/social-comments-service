@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { CommentService, requestFingerprint } from '../../src/comments/comment-service.js';
 import {
@@ -494,6 +494,25 @@ describe('replying to a comment', () => {
     });
   });
 
+  it('claims a key with a lease that outlives the request holding it', async () => {
+    // Both lease tests construct their own expiry, so REPLY_LEASE_MS itself was
+    // never read by an assertion: setting it to zero survived, which would make
+    // every in-flight claim instantly takeable (Spec-020).
+    const { service, operations, parentId } = await withCachedComments();
+    operations.complete = async () => {
+      throw new Error('database unavailable');
+    };
+    await expect(service.replyToComment(tenant, parentId, 'Thank you!', 'key-1')).rejects.toThrow();
+
+    const operation = await operations.findByIdempotencyKey(tenant, 'key-1');
+    const leaseMs = Date.parse(operation!.leaseExpiresAt) - Date.parse(operation!.createdAt);
+
+    // Must outlast the 30s HTTP request timeout, or a lease can expire while
+    // the request holding it is still running and a takeover races it.
+    expect(leaseMs).toBeGreaterThan(30_000);
+    expect(Date.parse(operation!.leaseExpiresAt)).toBeGreaterThan(Date.now());
+  });
+
   it('answers in-progress while the lease is live, not forever', async () => {
     const { service, operations, parentId } = await withCachedComments();
     const claimed = await operations.claim(tenant, {
@@ -834,6 +853,157 @@ describe('provider load under concurrency', () => {
     expect(result.snapshot.syncedAt).toBe(winner.completedAt);
   });
 
+  it('keys in-flight hydration by tenant as well as post', async () => {
+    // Dropping the tenant half of the dedup key survived every concurrency
+    // test, because they all use one tenant. Two tenants reading the same post
+    // identifier would then share one in-flight hydration, and the joiner
+    // would read a snapshot belonging to the other tenant (Spec-020).
+    const { service } = buildService();
+    const key = Reflect.get(service, 'postKey') as (
+      context: RequestContext,
+      postId: string,
+    ) => string;
+
+    const forA = key.call(service, tenant, 'post-shared');
+    const forB = key.call(service, { accountId: 'account-b', requestId: 'r' }, 'post-shared');
+
+    expect(forA).not.toBe(forB);
+    expect(forA).toContain(tenant.accountId);
+    expect(forB).toContain('account-b');
+  });
+
+  it('stops waiting for a joined hydration once the bound passes', async () => {
+    // `Promise.race` against the bound is what stops a joiner inheriting the
+    // whole twenty-call budget of the run it joined. A plain await would leave
+    // it waiting for the same amount of time, so the discriminating assertion
+    // has to be that the joiner *returns while the run is still in flight* —
+    // which needs the clock advanced past the bound (Spec-020).
+    let release: (() => void) | undefined;
+    const stalled = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let runnerFinished = false;
+    const client: ProviderClient = {
+      listComments: async () => {
+        await stalled;
+        return {
+          items: [externalComment('ig-comment-1', '2026-08-01T10:00:00.000Z')],
+          nextCursor: null,
+          hasMore: false,
+        };
+      },
+      replyToComment: async () => {
+        throw new Error('not used');
+      },
+    };
+    const service = new CommentService(
+      new InMemoryCommentRepository([], tenant.accountId),
+      new InMemoryPostRepository([post]),
+      new InMemoryReplyOperationRepository(),
+      new InMemoryPlatformProviderRegistry(
+        new Map([
+          [
+            post.platform,
+            new AdaptiveProviderAdapter(
+              post.platform,
+              client,
+              new Set(['list_comments']),
+              providerPolicies({ ...immediatePolicy, timeoutMs: 600_000 }),
+            ),
+          ],
+        ]),
+      ),
+    );
+
+    vi.useFakeTimers();
+    try {
+      const runner = service.listComments(tenant, post.id, { limit: 25 }).then((result) => {
+        runnerFinished = true;
+        return result;
+      });
+      // Let the runner reach its provider call and register as in flight.
+      await vi.advanceTimersByTimeAsync(1);
+      const joiner = service.listComments(tenant, post.id, { limit: 25 });
+
+      // Past the bound, with the run still stalled.
+      await vi.advanceTimersByTimeAsync(11_000);
+      const answered = await joiner;
+
+      expect(runnerFinished).toBe(false);
+      // A knowingly incomplete page, reported as such rather than as complete.
+      expect(answered.items).toEqual([]);
+      expect(answered.pagination.hasMore).toBe(true);
+
+      release?.();
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(runner).resolves.toMatchObject({ items: [expect.anything()] });
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('compares and sets against the stored snapshot, not the one it restarted from', async () => {
+    // A stale snapshot restarts the stream from empty while the stored row
+    // still says exhausted. Comparing against where this run *began* rather
+    // than against what is *stored* makes the very first write conflict with
+    // itself, so a refresh after the lifetime expires would stop after one
+    // page and report the stale state. Both are `PostSnapshotState`, so the
+    // swap typechecks and survived the suite (Spec-020).
+    const posts = new InMemoryPostRepository([post]);
+    await posts.saveSnapshotState(
+      tenant,
+      post.id,
+      // Read to the end, long enough ago to be stale.
+      { providerCursor: null, exhausted: true, completedAt: '2020-01-01T00:00:00.000Z' },
+      { providerCursor: null, exhausted: false, completedAt: null },
+    );
+
+    const client = new CountingClient(
+      new FixtureProviderClient({
+        commentsByPost: new Map([
+          [
+            post.externalPostId,
+            [
+              externalComment('ig-comment-1', '2026-08-01T10:00:00.000Z'),
+              externalComment('ig-comment-2', '2026-08-01T11:00:00.000Z'),
+              externalComment('ig-comment-3', '2026-08-01T12:00:00.000Z'),
+            ],
+          ],
+        ]),
+        maxPageSize: 1,
+        now: () => '2026-08-02T12:00:00.000Z',
+      }),
+    );
+    const logger = new RecordingLogger();
+    const service = new CommentService(
+      new InMemoryCommentRepository([], tenant.accountId),
+      posts,
+      new InMemoryReplyOperationRepository(),
+      new InMemoryPlatformProviderRegistry(
+        new Map([
+          [
+            post.platform,
+            new AdaptiveProviderAdapter(
+              post.platform,
+              client,
+              new Set(['list_comments']),
+              providerPolicies(immediatePolicy),
+            ),
+          ],
+        ]),
+      ),
+      noopMetrics,
+      logger,
+    );
+
+    const result = await service.listComments(tenant, post.id, { limit: 25 });
+
+    // The refresh ran to completion: no self-inflicted conflict on the first write.
+    expect(logger.find('comments.snapshot.conflict')).toBeUndefined();
+    expect(result.items).toHaveLength(3);
+    expect(result.pagination.hasMore).toBe(false);
+  });
+
   it('does not let a stale writer move the snapshot backwards', async () => {
     const posts = new InMemoryPostRepository([post]);
     const start = (await posts.findPublishedById(tenant, post.id))!.snapshot;
@@ -996,6 +1166,59 @@ describe('capability and platform gates', () => {
 
     expect(onInstagram.items.map((item) => item.body)).toEqual(['body of ig-comment-1']);
     expect(onYoutube.items.map((item) => item.body)).toEqual(['body of yt-comment-1']);
+  });
+});
+
+describe('domain validation is wired in, not merely defined', () => {
+  // All four validator call sites were removable with the suite green: the
+  // validators had their own unit tests, and nothing checked that the service
+  // and the adapter actually call them (Spec-020).
+
+  it('rejects a non-positive limit before touching the repository', async () => {
+    const { service, client } = buildService();
+
+    await expect(service.listComments(tenant, post.id, { limit: 0 })).rejects.toMatchObject({
+      code: 'INVALID_LIST_COMMENTS_QUERY',
+    });
+    expect(client.listCalls).toBe(0);
+  });
+
+  it('rejects an empty reply body before claiming the key', async () => {
+    const { service, operations, parentId } = await (async () => {
+      const built = buildService();
+      const listed = await built.service.listComments(tenant, post.id, { limit: 25 });
+      return { ...built, parentId: listed.items[0]!.id };
+    })();
+
+    await expect(service.replyToComment(tenant, parentId, '   ', 'key-1')).rejects.toMatchObject({
+      code: 'INVALID_REPLY_COMMAND',
+    });
+    await expect(operations.findByIdempotencyKey(tenant, 'key-1')).resolves.toBeNull();
+  });
+
+  it('refuses a provider observation that is missing its provider identifier', async () => {
+    // validateObservedComment guards the adapter boundary: an adapter that
+    // returns a record with no external id would otherwise be stored as a row
+    // that can never be deduplicated against.
+    const provider = new AdaptiveProviderAdapter(
+      post.platform,
+      {
+        listComments: async () => ({
+          items: [{ ...externalComment('', '2026-08-01T10:00:00.000Z'), externalId: '' }],
+          nextCursor: null,
+          hasMore: false,
+        }),
+        replyToComment: async () => {
+          throw new Error('not used');
+        },
+      },
+      new Set(['list_comments']),
+      providerPolicies(immediatePolicy),
+    );
+
+    await expect(
+      provider.listComments({ post, connection: post.connection, limit: 10 }),
+    ).rejects.toMatchObject({ code: 'INVALID_COMMENT' });
   });
 });
 
