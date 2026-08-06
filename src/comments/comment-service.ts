@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import {
   NotFoundError,
@@ -96,16 +96,43 @@ function snapshotLifetimeMs(): number {
 }
 
 /**
- * Binds an idempotency key to one request without storing the request. The
- * body is user content, and an audit row is the wrong place to keep it
- * (ADR-0011); a digest compares identically.
+ * Binds an idempotency key to one request without storing the request.
+ *
+ * The body is user content and an audit row is the wrong place to keep it
+ * (ADR-0011), so the row holds a digest instead. Unkeyed, that digest was a
+ * weaker version of storing the body dressed as a stronger one: it sits beside
+ * `comment_id` in the same row, so anyone who can read the table — a support
+ * engineer, a backup, an analytics export — could confirm a guess at a short
+ * reply with one hash, and "Thanks!" is a very small dictionary. Keying it
+ * makes that impossible without the secret (Spec-023).
  *
  * Exported because it defines how a key binds to a request, which a test
  * constructing a realistic claim needs to reproduce rather than guess.
  */
-export function requestFingerprint(commentId: string, body: string): string {
-  return createHash('sha256').update(`${commentId}:${body}`, 'utf8').digest('hex');
+export function requestFingerprint(commentId: string, body: string, secret: string): string {
+  return createHmac('sha256', secret).update(`${commentId}:${body}`, 'utf8').digest('hex');
 }
+
+/**
+ * Compares two fingerprints without leaking where they diverge.
+ *
+ * One side is derived from attacker-influenced input, so the comparison is
+ * timing-safe. Lengths are equal by construction; an unequal length means a
+ * value that did not come from this function, which is a mismatch.
+ */
+function fingerprintsMatch(stored: string, computed: string): boolean {
+  const left = Buffer.from(stored, 'utf8');
+  const right = Buffer.from(computed, 'utf8');
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
+}
+
+/**
+ * Used when no secret is configured, which only happens outside production —
+ * the composition refuses to start otherwise. Fixed and obviously fake, so
+ * nobody can mistake it for a real one, and named in the startup log.
+ */
+export const developmentFingerprintSecret = 'development-only-unsafe-fingerprint-key';
 
 const emptySnapshotState: PostSnapshotState = {
   providerCursor: null,
@@ -137,6 +164,11 @@ export class CommentService {
     private readonly providers: PlatformProviderRegistry,
     private readonly metrics: Metrics = noopMetrics,
     private readonly logger: Logger = noopLogger,
+    /**
+     * Keys the idempotency fingerprint (Spec-023). Supplied by the
+     * composition, which refuses to start in production without one.
+     */
+    private readonly fingerprintSecret: string = developmentFingerprintSecret,
   ) {}
 
   /**
@@ -282,7 +314,7 @@ export class CommentService {
   ): Promise<Comment> {
     const command: ReplyToCommentCommand = { commentId, body, idempotencyKey };
     validateReplyToCommentCommand(command);
-    const fingerprint = requestFingerprint(commentId, body);
+    const fingerprint = requestFingerprint(commentId, body, this.fingerprintSecret);
 
     const previous = await this.operations.findByIdempotencyKey(context, idempotencyKey);
     if (previous) {
@@ -676,7 +708,7 @@ export class CommentService {
     operation: ReplyOperation,
     fingerprint: string,
   ): Promise<Comment | null> {
-    if (operation.requestFingerprint !== fingerprint) {
+    if (!fingerprintsMatch(operation.requestFingerprint, fingerprint)) {
       throw new ServiceError(
         'IDEMPOTENCY_CONFLICT',
         'idempotency_key_body_mismatch',

@@ -7,6 +7,7 @@ import {
   demoPost,
   toLoggerPort,
 } from '../../src/index.js';
+import { developmentFingerprintSecret } from '../../src/comments/comment-service.js';
 import { noopLogger, type Metrics } from '../../src/shared/observability.js';
 
 /**
@@ -19,37 +20,72 @@ import { noopLogger, type Metrics } from '../../src/shared/observability.js';
  * (Spec-020).
  */
 describe('composition selection', () => {
+  const withSecret = { IDEMPOTENCY_FINGERPRINT_SECRET: 'a-real-secret' };
+
   it('runs on PostgreSQL when a database URL is present', () => {
     expect(chooseComposition({ DATABASE_URL: 'postgres://x/y' })).toEqual({
       kind: 'postgres',
       databaseUrl: 'postgres://x/y',
+      fingerprintSecret: developmentFingerprintSecret,
     });
   });
 
   it('runs the in-memory demo outside production', () => {
-    expect(chooseComposition({})).toEqual({ kind: 'demo' });
-    expect(chooseComposition({ NODE_ENV: 'development' })).toEqual({ kind: 'demo' });
+    expect(chooseComposition({})).toEqual({
+      kind: 'demo',
+      fingerprintSecret: developmentFingerprintSecret,
+    });
+    expect(chooseComposition({ NODE_ENV: 'development' }).kind).toBe('demo');
   });
 
   it('refuses to start in production without a database', () => {
     // The in-memory composition passes its health check, accepts any account,
     // and has no row-level security behind it. Starting it because a variable
     // was misspelled is the worst outcome available.
-    const choice = chooseComposition({ NODE_ENV: 'production' });
+    const choice = chooseComposition({ NODE_ENV: 'production', ...withSecret });
 
     expect(choice.kind).toBe('refuse');
     expect(choice.kind === 'refuse' && choice.reason).toContain('DATABASE_URL');
   });
 
-  it('treats an empty database URL as absent, not as a connection string', () => {
-    expect(chooseComposition({ NODE_ENV: 'production', DATABASE_URL: '' }).kind).toBe('refuse');
+  it('refuses to start in production without a fingerprint secret', () => {
+    // Falling back to the development key would leave the deployment believing
+    // its stored fingerprints were unguessable when they are computed from a
+    // constant in this repository (Spec-023).
+    const choice = chooseComposition({
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgres://x/y',
+    });
+
+    expect(choice.kind).toBe('refuse');
+    expect(choice.kind === 'refuse' && choice.reason).toContain('IDEMPOTENCY_FINGERPRINT_SECRET');
+  });
+
+  it('treats an empty value as absent for both required settings', () => {
+    expect(
+      chooseComposition({ NODE_ENV: 'production', DATABASE_URL: '', ...withSecret }).kind,
+    ).toBe('refuse');
+    expect(
+      chooseComposition({
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgres://x/y',
+        IDEMPOTENCY_FINGERPRINT_SECRET: '',
+      }).kind,
+    ).toBe('refuse');
     expect(chooseComposition({ DATABASE_URL: '' }).kind).toBe('demo');
   });
 
-  it('still runs on PostgreSQL in production when the URL is set', () => {
-    expect(chooseComposition({ NODE_ENV: 'production', DATABASE_URL: 'postgres://x/y' })).toEqual({
+  it('starts in production when both are set, and uses the configured secret', () => {
+    expect(
+      chooseComposition({
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgres://x/y',
+        ...withSecret,
+      }),
+    ).toEqual({
       kind: 'postgres',
       databaseUrl: 'postgres://x/y',
+      fingerprintSecret: 'a-real-secret',
     });
   });
 });

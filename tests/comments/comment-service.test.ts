@@ -1,6 +1,12 @@
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it, vi } from 'vitest';
 
-import { CommentService, requestFingerprint } from '../../src/comments/comment-service.js';
+import {
+  CommentService,
+  developmentFingerprintSecret,
+  requestFingerprint,
+} from '../../src/comments/comment-service.js';
 import {
   AdaptiveProviderAdapter,
   type ProviderClient,
@@ -519,7 +525,7 @@ describe('replying to a comment', () => {
       id: crypto.randomUUID(),
       commentId: parentId,
       idempotencyKey: 'key-1',
-      requestFingerprint: requestFingerprint(parentId, 'Thank you!'),
+      requestFingerprint: requestFingerprint(parentId, 'Thank you!', developmentFingerprintSecret),
       status: 'pending',
       resultingCommentId: null,
       failureCode: null,
@@ -546,7 +552,7 @@ describe('replying to a comment', () => {
       id: crypto.randomUUID(),
       commentId: parentId,
       idempotencyKey: 'key-1',
-      requestFingerprint: requestFingerprint(parentId, 'Thank you!'),
+      requestFingerprint: requestFingerprint(parentId, 'Thank you!', developmentFingerprintSecret),
       status: 'pending',
       resultingCommentId: null,
       failureCode: null,
@@ -583,7 +589,7 @@ describe('replying to a comment', () => {
       id: crypto.randomUUID(),
       commentId: parentId,
       idempotencyKey: 'key-2',
-      requestFingerprint: requestFingerprint(parentId, 'Thank you!'),
+      requestFingerprint: requestFingerprint(parentId, 'Thank you!', developmentFingerprintSecret),
       status: 'pending',
       resultingCommentId: null,
       failureCode: null,
@@ -623,6 +629,27 @@ describe('replying to a comment', () => {
 
     await expect(operations.findByIdempotencyKey(tenant, 'key-2')).resolves.toBeNull();
     expect(client.replyCalls).toBe(callsBefore);
+  });
+
+  it('refuses one key reused against a different parent comment', async () => {
+    // The comment half of the fingerprint had no test: reducing the digest to
+    // sha256(body) survived the whole suite, because no test ever replayed a
+    // key against another parent (Spec-023).
+    const { service } = buildService();
+    const listed = await service.listComments(tenant, post.id, { limit: 25 });
+    const [first, second] = [listed.items[0]!.id, listed.items[1]!.id];
+    expect(first).not.toBe(second);
+
+    await service.replyToComment(tenant, first, 'Thank you!', 'shared-key');
+
+    // Same key, same body, different parent. The body alone cannot tell these
+    // apart; only the comment identifier can.
+    await expect(
+      service.replyToComment(tenant, second, 'Thank you!', 'shared-key'),
+    ).rejects.toMatchObject({
+      code: 'IDEMPOTENCY_CONFLICT',
+      reason: 'idempotency_key_body_mismatch',
+    });
   });
 
   it('reports an unknown comment rather than guessing provider coordinates', async () => {
@@ -1245,6 +1272,74 @@ describe('provider authorization context', () => {
   });
 });
 
+describe('idempotency fingerprint', () => {
+  it('cannot be recomputed from the stored row without the secret', () => {
+    // The digest sits beside comment_id in the same row. Unkeyed, anyone who
+    // could read the table could confirm a guess at a short reply body with
+    // one hash — and the row exists precisely so the body is not stored
+    // (ADR-0011, Spec-023).
+    const stored = requestFingerprint('comment-1', 'Thanks!', 'the-real-secret');
+
+    const guessedWithoutSecret = createHash('sha256')
+      .update('comment-1:Thanks!', 'utf8')
+      .digest('hex');
+    const guessedWithWrongSecret = requestFingerprint('comment-1', 'Thanks!', 'a-wrong-secret');
+
+    expect(stored).not.toBe(guessedWithoutSecret);
+    expect(stored).not.toBe(guessedWithWrongSecret);
+  });
+
+  it('is stable for the same input under the same secret', () => {
+    expect(requestFingerprint('comment-1', 'Thanks!', 'k')).toBe(
+      requestFingerprint('comment-1', 'Thanks!', 'k'),
+    );
+  });
+
+  it('distinguishes the comment, the body, and the secret', () => {
+    const base = requestFingerprint('comment-1', 'Thanks!', 'k');
+
+    expect(requestFingerprint('comment-2', 'Thanks!', 'k')).not.toBe(base);
+    expect(requestFingerprint('comment-1', 'Thanks?', 'k')).not.toBe(base);
+    expect(requestFingerprint('comment-1', 'Thanks!', 'k2')).not.toBe(base);
+  });
+
+  it('never writes the secret into a log record', async () => {
+    const secret = 'sentinel-fingerprint-secret';
+    const logger = new RecordingLogger();
+    const service = new CommentService(
+      new InMemoryCommentRepository([], tenant.accountId),
+      new InMemoryPostRepository([post]),
+      new InMemoryReplyOperationRepository(),
+      new InMemoryPlatformProviderRegistry(
+        new Map([
+          [
+            post.platform,
+            new AdaptiveProviderAdapter(
+              post.platform,
+              new FixtureProviderClient({
+                commentsByPost: new Map([
+                  [post.externalPostId, [externalComment('ig-1', '2026-08-01T10:00:00.000Z')]],
+                ]),
+                now: () => '2026-08-02T12:00:00.000Z',
+              }),
+              new Set(['list_comments', 'reply_to_comment']),
+              providerPolicies(immediatePolicy),
+            ),
+          ],
+        ]),
+      ),
+      noopMetrics,
+      logger,
+      secret,
+    );
+
+    const listed = await service.listComments(tenant, post.id, { limit: 25 });
+    await service.replyToComment(tenant, listed.items[0]!.id, 'Thank you!', 'key-1');
+
+    expect(JSON.stringify(logger.records)).not.toContain(secret);
+  });
+});
+
 describe('capability and platform gates', () => {
   it('refuses to read from a provider that cannot list comments', async () => {
     // `requireCapability(provider, 'list_comments')` was deletable with the
@@ -1390,7 +1485,7 @@ describe('service error contract', () => {
       id: crypto.randomUUID(),
       commentId: parentId,
       idempotencyKey: 'key-flight',
-      requestFingerprint: requestFingerprint(parentId, 'Thank you!'),
+      requestFingerprint: requestFingerprint(parentId, 'Thank you!', developmentFingerprintSecret),
       status: 'pending',
       resultingCommentId: null,
       failureCode: null,

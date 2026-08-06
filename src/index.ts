@@ -5,7 +5,7 @@ import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 
 import { registerCommentRoutes } from './api/routes.js';
-import { CommentService } from './comments/comment-service.js';
+import { CommentService, developmentFingerprintSecret } from './comments/comment-service.js';
 import { InMemoryPlatformProviderRegistry } from './platforms/provider-registry.js';
 import {
   AdaptiveProviderAdapter,
@@ -68,6 +68,11 @@ export interface ApplicationDependencies {
     | ((logger: Logger) => ReadonlyMap<Platform, AdaptiveProvider>);
   metrics?: Metrics;
   logger?: boolean;
+  /**
+   * Keys the idempotency fingerprint (Spec-023). Defaults to the development
+   * key; `chooseComposition` refuses to start production without a real one.
+   */
+  fingerprintSecret?: string;
   /**
    * Serves the OpenAPI document and Swagger UI. Defaults to enabled outside
    * production: a service behind an internal gateway has no reason to publish
@@ -162,6 +167,7 @@ export function createApplication(dependencies: ApplicationDependencies = {}): F
     providers,
     dependencies.metrics ?? loggingMetrics(logger),
     logger,
+    dependencies.fingerprintSecret ?? developmentFingerprintSecret,
   );
 
   if (apiDocsEnabled(dependencies.apiDocs)) {
@@ -208,25 +214,42 @@ export function createApplication(dependencies: ApplicationDependencies = {}): F
  * whose whole job is to prevent a silent production downgrade.
  */
 export type CompositionChoice =
-  { kind: 'postgres'; databaseUrl: string } | { kind: 'demo' } | { kind: 'refuse'; reason: string };
+  | { kind: 'postgres'; databaseUrl: string; fingerprintSecret: string }
+  | { kind: 'demo'; fingerprintSecret: string }
+  | { kind: 'refuse'; reason: string };
 
 export function chooseComposition(env: NodeJS.ProcessEnv): CompositionChoice {
+  const production = env.NODE_ENV === 'production';
   const databaseUrl = env.DATABASE_URL;
-  if (databaseUrl !== undefined && databaseUrl !== '') {
-    return { kind: 'postgres', databaseUrl };
-  }
+  const configuredSecret = env.IDEMPOTENCY_FINGERPRINT_SECRET;
+
   // Falling back to the demo composition in production would start a service
   // that passes its health check, accepts any account, and has no row-level
   // security behind it. A missing or misspelled DATABASE_URL must stop the
   // process, not silently downgrade it.
-  if (env.NODE_ENV === 'production') {
+  if (production && (databaseUrl === undefined || databaseUrl === '')) {
     return {
       kind: 'refuse',
       reason:
         'DATABASE_URL is required when NODE_ENV=production: refusing to start the in-memory composition.',
     };
   }
-  return { kind: 'demo' };
+  // Same shape, same reason (Spec-023). Falling back to the development key in
+  // production would leave a deployment believing its stored fingerprints were
+  // unguessable when they are computed from a constant in this repository.
+  if (production && (configuredSecret === undefined || configuredSecret === '')) {
+    return {
+      kind: 'refuse',
+      reason:
+        'IDEMPOTENCY_FINGERPRINT_SECRET is required when NODE_ENV=production: refusing to start with the development key.',
+    };
+  }
+
+  const fingerprintSecret = configuredSecret ?? developmentFingerprintSecret;
+  if (databaseUrl !== undefined && databaseUrl !== '') {
+    return { kind: 'postgres', databaseUrl, fingerprintSecret };
+  }
+  return { kind: 'demo', fingerprintSecret };
 }
 
 /** Identifiers used by the runnable demo composition and the README examples. */
@@ -336,7 +359,7 @@ const fixtureCommentsByPost = new Map<string, readonly ExternalCommentRecord[]>(
  */
 export function createPostgresApplication(
   connectionString: string,
-  overrides: Pick<ApplicationDependencies, 'logger' | 'apiDocs'> = {},
+  overrides: Pick<ApplicationDependencies, 'logger' | 'apiDocs' | 'fingerprintSecret'> = {},
 ): { application: FastifyInstance; database: Database } {
   const database = new PostgresDatabase(connectionString);
   const client = new FixtureProviderClient({
@@ -372,7 +395,10 @@ export function createPostgresApplication(
  * seeded data.
  */
 export function createDemoApplication(
-  overrides: Pick<ApplicationDependencies, 'logger' | 'apiDocs' | 'metrics'> = {},
+  overrides: Pick<
+    ApplicationDependencies,
+    'logger' | 'apiDocs' | 'metrics' | 'fingerprintSecret'
+  > = {},
 ): FastifyInstance {
   const client = new FixtureProviderClient({
     commentsByPost: new Map([[demoPost.externalPostId, demoExternalComments]]),

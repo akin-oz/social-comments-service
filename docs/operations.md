@@ -55,6 +55,14 @@ where status = 'unknown'
    or (status = 'pending' and lease_expires_at < now());
 ```
 
+### The idempotency fingerprint secret
+
+`IDEMPOTENCY_FINGERPRINT_SECRET` keys the digest that binds an idempotency key to one request (Spec-023). **The service refuses to start under `NODE_ENV=production` without it**, in the same way and for the same reason it refuses without `DATABASE_URL`: falling back would leave the deployment believing its stored fingerprints were unguessable when they are computed from a constant in this repository. Outside production a fixed development key is used and the startup log reports `fingerprintKey: "development"`, so a configured deployment is distinguishable from a defaulted one at a glance.
+
+The digest is an HMAC rather than a plain hash because `request_fingerprint` sits in the same row as `comment_id`, and the row exists precisely so the reply body is not stored (ADR-0011). Unkeyed, anyone who could read the table — a support engineer, a backup, an analytics export — could confirm a guess at a short reply with one hash, and "Thanks!" is a very small dictionary.
+
+**Rotating the secret invalidates every stored fingerprint.** A client replaying an in-flight idempotency key across the rotation is told its request body changed (`idempotency_key_body_mismatch`), which from outside looks like a client bug. The exposure window is minutes long — the length of a reply operation — so rotate during a quiet period rather than carrying a previous key for comparison.
+
 ## Observability
 
 Logs are structured records carrying a stable `event` name in a `noun.verb` namespace (ADR-0011). Alerts and dashboards match on `event`, never on message text, so wording stays editable. Every application and provider record carries `requestId` and `accountId`, so a request can be reconstructed end to end.

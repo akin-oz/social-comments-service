@@ -41,6 +41,9 @@ services:
       # reviewers, not a deployment, so the documented opt-in is applied here
       # to keep /documentation reachable. A real deployment leaves it unset.
       ENABLE_API_DOCS: 'true'
+      # Required under NODE_ENV=production, which the image sets. A local
+      # value: rotating it invalidates every stored fingerprint (Spec-023).
+      IDEMPOTENCY_FINGERPRINT_SECRET: local-development-fingerprint-secret
     ports:
       - '3000:3000'
     depends_on:

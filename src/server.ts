@@ -22,10 +22,14 @@ if (choice.kind === 'refuse') {
 // repositories so the demo needs nothing installed. Either way the provider is
 // the deterministic fixture, since no live platform SDK is selected.
 const databaseUrl = choice.kind === 'postgres' ? choice.databaseUrl : undefined;
+const { fingerprintSecret } = choice;
 const composed =
   choice.kind === 'postgres'
-    ? createPostgresApplication(choice.databaseUrl)
-    : { application: createDemoApplication(), database: undefined as Database | undefined };
+    ? createPostgresApplication(choice.databaseUrl, { fingerprintSecret })
+    : {
+        application: createDemoApplication({ fingerprintSecret }),
+        database: undefined as Database | undefined,
+      };
 
 const { application, database } = composed;
 
@@ -38,6 +42,9 @@ application
         address,
         logLevel: process.env.LOG_LEVEL ?? 'info',
         composition: databaseUrl ? 'postgres' : 'demo',
+        // Named, so nobody mistakes the development key for a configured one.
+        fingerprintKey:
+          process.env.IDEMPOTENCY_FINGERPRINT_SECRET === undefined ? 'development' : 'configured',
         provider: 'fixture',
         persistence: databaseUrl ? 'postgres' : 'in-memory',
         accountId: demoAccountId,
