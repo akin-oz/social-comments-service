@@ -1,8 +1,8 @@
 ---
 spec: 022
 title: Stop client mistakes arriving as service failures
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: api
 depends_on:
   - Spec-011

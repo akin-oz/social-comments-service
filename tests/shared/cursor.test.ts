@@ -5,7 +5,20 @@ import { ServiceError } from '../../src/shared/errors.js';
 
 describe('opaque pagination cursor', () => {
   it('round-trips a keyset position', () => {
-    const cursor = { after: { publishedAt: '2026-08-01T10:00:00.000Z', id: 'comment-1' } };
+    const cursor = {
+      after: { publishedAt: '2026-08-01T10:00:00.000Z', id: 'comment-1' },
+      partialRun: false,
+    };
+    expect(decodeCursor(encodeCursor(cursor))).toEqual(cursor);
+  });
+
+  it('round-trips the partial-run flag a run carries with it', () => {
+    // The flag says this run began before the snapshot was complete, which
+    // outlives the snapshot becoming complete underneath it (Spec-021).
+    const cursor = {
+      after: { publishedAt: '2026-08-01T10:00:00.000Z', id: 'comment-1' },
+      partialRun: true,
+    };
     expect(decodeCursor(encodeCursor(cursor))).toEqual(cursor);
   });
 
@@ -14,6 +27,7 @@ describe('opaque pagination cursor', () => {
     // must not hand one out either (Spec-014).
     const encoded = encodeCursor({
       after: { publishedAt: '2026-08-01T10:00:00.000Z', id: 'comment-1' },
+      partialRun: false,
     });
     expect(Buffer.from(encoded, 'base64url').toString('utf8')).not.toContain('provider');
   });
@@ -25,6 +39,7 @@ describe('opaque pagination cursor', () => {
     ).toString('base64url');
     expect(decodeCursor(legacy)).toEqual({
       after: { publishedAt: '2026-08-01T10:00:00.000Z', id: 'comment-1' },
+      partialRun: false,
     });
   });
 

@@ -1,8 +1,8 @@
 ---
 spec: 021
 title: Stop a bounded pagination run reporting completion it did not reach
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: api
 depends_on:
   - Spec-009

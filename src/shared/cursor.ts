@@ -11,17 +11,29 @@ import type { CommentKeyset, PageCursor } from './types.js';
  */
 export interface CommentCursor {
   after: CommentKeyset | null;
+  /**
+   * Whether the run this cursor belongs to began over a snapshot the service
+   * had not finished reading (Spec-021).
+   *
+   * It travels with the cursor because it is a property of the run, not of the
+   * post: the snapshot may well be complete by the time the run ends, and the
+   * run would still have missed everything backfilled behind its position.
+   */
+  partialRun: boolean;
 }
 
 interface EncodedCursor {
   a: [string, string] | null;
+  /** Short, because every cursor carries it and clients never read it. */
+  r?: 1;
 }
 
-export const emptyCursor: CommentCursor = { after: null };
+export const emptyCursor: CommentCursor = { after: null, partialRun: false };
 
 export function encodeCursor(cursor: CommentCursor): PageCursor {
   const payload: EncodedCursor = {
     a: cursor.after ? [cursor.after.publishedAt, cursor.after.id] : null,
+    ...(cursor.partialRun ? { r: 1 as const } : {}),
   };
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
 }
@@ -31,7 +43,10 @@ export function decodeCursor(value: PageCursor | undefined): CommentCursor {
   const payload = parse(value);
   const after = payload.a;
   if (after !== null && !isKeysetTuple(after)) throw invalidCursor();
-  return { after: after === null ? null : { publishedAt: after[0], id: after[1] } };
+  return {
+    after: after === null ? null : { publishedAt: after[0], id: after[1] },
+    partialRun: payload.r === 1,
+  };
 }
 
 function parse(value: PageCursor): EncodedCursor {

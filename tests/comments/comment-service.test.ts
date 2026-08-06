@@ -645,6 +645,139 @@ describe('replying to a comment', () => {
   });
 });
 
+describe('pagination deeper than the hydration budget', () => {
+  const TOTAL = 60;
+
+  /**
+   * Newest first, one comment per provider page — the shape Meta, X, and
+   * YouTube all return, at a depth past `MAX_HYDRATIONS_PER_REQUEST`.
+   *
+   * The previous fixture used three provider pages against a bound of twenty,
+   * so the bound was unreachable and both `MAX_HYDRATIONS_PER_REQUEST` and the
+   * `hasMore` expression survived mutation (Spec-021).
+   */
+  function deepProvider() {
+    const newestFirst = Array.from({ length: TOTAL }, (_unused, index) => {
+      const ordinal = TOTAL - index;
+      const at = new Date(Date.parse('2026-08-01T00:00:00.000Z') + ordinal * 60_000).toISOString();
+      return externalComment(`c-${String(ordinal).padStart(3, '0')}`, at);
+    });
+    let calls = 0;
+    const client: ProviderClient = {
+      listComments: async (query) => {
+        calls += 1;
+        const offset = query.cursor === undefined ? 0 : Number(query.cursor);
+        const items = newestFirst.slice(offset, offset + 1);
+        const next = offset + items.length;
+        return { items, nextCursor: next < TOTAL ? String(next) : null, hasMore: next < TOTAL };
+      },
+      replyToComment: async () => {
+        throw new Error('not used');
+      },
+    };
+    return { client, calls: () => calls };
+  }
+
+  function deepService() {
+    const provider = deepProvider();
+    const service = new CommentService(
+      new InMemoryCommentRepository([], tenant.accountId),
+      new InMemoryPostRepository([post]),
+      new InMemoryReplyOperationRepository(),
+      new InMemoryPlatformProviderRegistry(
+        new Map([
+          [
+            post.platform,
+            new AdaptiveProviderAdapter(
+              post.platform,
+              provider.client,
+              new Set(['list_comments']),
+              providerPolicies(immediatePolicy),
+            ),
+          ],
+        ]),
+      ),
+    );
+    return { service, calls: provider.calls };
+  }
+
+  /** Follows the cursor to the end, as a client is told to. */
+  async function walk(service: CommentService) {
+    const seen = new Set<string>();
+    let cursor: string | null = null;
+    let requests = 0;
+    let last: Awaited<ReturnType<CommentService['listComments']>> | undefined;
+    do {
+      const page: Awaited<ReturnType<CommentService['listComments']>> = await service.listComments(
+        tenant,
+        post.id,
+        {
+          limit: 25,
+          ...(cursor === null ? {} : { cursor }),
+        },
+      );
+      for (const item of page.items) seen.add(item.body);
+      cursor = page.pagination.nextCursor;
+      last = page;
+      requests += 1;
+    } while (cursor !== null && requests < 40);
+    return { seen, requests, last: last! };
+  }
+
+  it('tells a run it was served over an incomplete snapshot', async () => {
+    // The bound is hit on the first request, so this run can never reach what
+    // the snapshot backfills behind it. `syncedAt: null` is the contract's
+    // signal that the run is partial, and it must survive the snapshot
+    // completing underneath the run.
+    const { service } = deepService();
+
+    const first = await service.listComments(tenant, post.id, { limit: 25 });
+
+    expect(first.pagination.hasMore).toBe(true);
+    expect(first.pagination.nextCursor).toEqual(expect.any(String));
+    expect(first.snapshot.syncedAt).toBeNull();
+  });
+
+  it('does not report a partial run as complete when it runs out of items', async () => {
+    // The defect: the walk returned 20 of 60 and then `nextCursor: null` with
+    // `syncedAt` set, so a client following the contract stopped believing it
+    // had everything. All 60 were already fetched and stored.
+    const { service } = deepService();
+
+    const { seen, last } = await walk(service);
+
+    expect(seen.size).toBeLessThan(TOTAL);
+    // Ending on a null syncedAt is what says "this run was partial, start again".
+    expect(last.snapshot.syncedAt).toBeNull();
+  });
+
+  it('returns every comment once the run restarts over the finished snapshot', async () => {
+    const { service, calls } = deepService();
+
+    const firstWalk = await walk(service);
+    expect(firstWalk.last.snapshot.syncedAt).toBeNull();
+    const afterFirst = calls();
+
+    const secondWalk = await walk(service);
+
+    expect(secondWalk.seen.size).toBe(TOTAL);
+    // A complete run says so, and costs the provider nothing more.
+    expect(secondWalk.last.snapshot.syncedAt).toEqual(expect.any(String));
+    expect(calls()).toBe(afterFirst);
+  });
+
+  it('still reports a shallow post complete on its first run', async () => {
+    // The fix must not make every run claim to be partial forever.
+    const { service } = buildService();
+
+    const result = await service.listComments(tenant, post.id, { limit: 25 });
+
+    expect(result.pagination.hasMore).toBe(false);
+    expect(result.pagination.nextCursor).toBeNull();
+    expect(result.snapshot.syncedAt).toEqual(expect.any(String));
+  });
+});
+
 describe('provider load under concurrency', () => {
   /** A client that takes a tick to answer, so concurrent callers overlap. */
   function slowClient(inner: ProviderClient): ProviderClient {

@@ -210,6 +210,18 @@ export class CommentService {
       const last = page.items[page.items.length - 1];
       // Completeness decides this, not whether this page happened to fill.
       const hasMore = page.hasMore || !state.exhausted;
+
+      // A run that began before the snapshot was complete can never see what
+      // the snapshot backfills behind its cursor. Providers return newest
+      // first, so a bounded hydration leaves this run holding the newest
+      // comments and every later page lands *older* — behind an ascending
+      // keyset, and therefore unreachable for the rest of the run (Spec-021).
+      //
+      // The flag rides the cursor because it describes the run, not the post:
+      // by the time the run ends the snapshot is usually complete, and the run
+      // has still missed everything that arrived behind it.
+      const partialRun = startingRun ? !state.exhausted : cursor.partialRun;
+
       const pagination = {
         hasMore,
         nextCursor: hasMore
@@ -217,6 +229,7 @@ export class CommentService {
               // With nothing returned, the caller keeps its position and comes
               // back; each request advances the snapshot.
               after: last ? { publishedAt: last.publishedAt, id: last.id } : cursor.after,
+              partialRun,
             })
           : null,
       };
@@ -235,13 +248,18 @@ export class CommentService {
           hasMore,
           hydrations,
           joined,
+          partialRun,
           durationMs,
         },
       );
       return {
         items: page.items,
         pagination,
-        snapshot: { syncedAt: state.completedAt },
+        // Reported as of this run, not as of the post. A partial run keeps
+        // reporting `null` even once the snapshot finishes underneath it,
+        // because the run itself was never served a complete one — and a run
+        // that ends on `null` is the contract's signal to start again.
+        snapshot: { syncedAt: partialRun ? null : state.completedAt },
       };
     } catch (error) {
       const code = toFailureCode(error);

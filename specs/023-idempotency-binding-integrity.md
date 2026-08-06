@@ -1,8 +1,8 @@
 ---
 spec: 023
 title: Make the idempotency fingerprint bind what it claims to bind
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: platform-integration
 depends_on:
   - Spec-010

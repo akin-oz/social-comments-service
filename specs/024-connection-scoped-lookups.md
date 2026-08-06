@@ -1,8 +1,8 @@
 ---
 spec: 024
 title: Scope provider-identifier lookups to the connection that issued them
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: platform-integration
 depends_on:
   - ADR-0013

@@ -42,7 +42,22 @@ Starting a pagination run — a request with no cursor — reads the post throug
 
 `hasMore` reflects whether more comments exist, not whether this response filled the page, and a response may contain fewer than `limit`.
 
-Every response carries `snapshot.syncedAt`: when the post was last read through at the provider, or `null` if it never has been. Comments published since may not be present. A completed snapshot is re-read once it ages past the service's snapshot lifetime, so a post does not stay frozen at the moment it was first read.
+Every response carries `snapshot.syncedAt`: when the post was last read through at the provider, or `null`. Comments published since may not be present. A completed snapshot is re-read once it ages past the service's snapshot lifetime, so a post does not stay frozen at the moment it was first read.
+
+#### A run that ends on `syncedAt: null` was partial — start it again
+
+`syncedAt` is reported **as of the run**, not as of the post, and this is load-bearing (Spec-021).
+
+Completing a snapshot is bounded, so a post with more provider pages than the budget begins its run over a snapshot the service is still filling. Providers return newest-first while this API returns oldest-first, so everything fetched after that point lands _behind_ the run's cursor and the run can never reach it. Such a run reports `syncedAt: null` on every page including its last, even though the snapshot has usually completed by then.
+
+**The rule: if the final page of a run — the one with `hasMore: false` — carries `snapshot.syncedAt: null`, that run did not see everything. Start again from no cursor.** The second run is served over the finished snapshot, returns every comment, costs no provider traffic, and ends with `syncedAt` set.
+
+A client that ignores `syncedAt` gets a correct, duplicate-free, gap-free page sequence over a partial view. That is the trade: the alternative is holding the first request open until an arbitrarily large post has been read end to end.
+
+```
+run 1:  … → hasMore: false, syncedAt: null   ← partial, restart
+run 2:  … → hasMore: false, syncedAt: "…"    ← complete
+```
 
 ### Request
 

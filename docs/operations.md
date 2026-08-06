@@ -25,6 +25,12 @@ Two consequences an operator should know:
 
 Snapshot advances are compare-and-set: a hydration only moves the stored continuation from the state it read. A losing writer keeps the newer state and stops rather than retrying, which would loop under sustained concurrency. Watch `comments.list.hydration_joined` against `comments.list.hydration_started` to see how much duplicate provider traffic is being avoided, and `comments.snapshot.conflict` for how often two hydrations are racing.
 
+### Reads deeper than the hydration budget
+
+One request completes a post's provider stream, bounded at twenty provider calls. A post deeper than that is served over a snapshot still being read, and the run is marked partial: `snapshot.syncedAt` reports `null` for every page of that run, which is the contract's instruction to the client to start again once the snapshot finishes (Spec-021).
+
+Nothing is lost from the database — the comments are fetched and stored, they are simply behind that run's cursor. `comments.list.*` records carry `partialRun`, so the share of reads landing on posts too deep for one budget is measurable. A consistently high share is the signal to raise `MAX_HYDRATIONS_PER_REQUEST` or to hydrate ahead of the request.
+
 ### Reply operation states
 
 A reply operation is claimed on insert and holds that claim under a **lease of two minutes** — comfortably longer than any request that can still be alive, since the HTTP request timeout is thirty seconds. The lease exists because a claim held forever means a process that dies mid-request poisons its idempotency key permanently (Spec-015).
