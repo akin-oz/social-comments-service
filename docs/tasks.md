@@ -109,7 +109,7 @@ Five investigators re-ran the board after the review-board remediation landed. T
 
 ### Still open
 
-- [ ] **`validateComment` is called by nothing in `src/`.** Wiring it into the repositories would turn a mapper defect into a typed failure rather than a malformed response — worth doing, a behaviour change, recorded in [testing.md](testing.md) and left for a spec.
+- [ ] **`validateComment` is called by nothing in `src/`.** Specified as [Spec-025](../specs/025-mapper-output-validation.md). Wiring it into the two `toComment` mappers turns a mapper defect into a typed failure rather than a malformed response — the defect class that actually shipped here, in the sibling `toOperation` mapper, which still has no validator either. The spec's substance is what the guard does when it fires: throwing blocks a page and, under keyset pagination, everything after it, while `DomainValidationError`'s existing `400` mapping would blame the client for a service fault.
 
 ## Raised by the delivery-readiness review
 
