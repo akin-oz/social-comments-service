@@ -3,3 +3,7 @@
 pnpm-lock.yaml
 docs/openapi.json
 dist/
+# The ai-engineering compiler's ownership state. Formatting it by hand sets up
+# ping-pong between this gate and the CI drift gate the next time sync rewrites
+# it in the compiler's own style.
+.ai/state/
