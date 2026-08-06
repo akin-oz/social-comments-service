@@ -50,7 +50,17 @@ describe.skipIf(!enabled)('PostgreSQL composition through the API', () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.data.length).toBeGreaterThan(0);
-    expect(body.data[0]).toMatchObject({ postId: tenantA.postId, platform: tenantA.platform });
+    // Assert the actual fixture content, not just the fields the query filtered
+    // on: a two-field subset would hold on wrong bodies, wrong authors, or a
+    // page that returned one row where three were stored.
+    const bodies = body.data.map((item: { body: string }) => item.body);
+    expect(bodies).toContain('This is great!');
+    expect(body.data[0]).toMatchObject({
+      postId: tenantA.postId,
+      platform: tenantA.platform,
+      author: { displayName: expect.any(String) },
+      publishedAt: expect.any(String),
+    });
   });
 
   it('round-trips its own cursor against real rows', async () => {
@@ -122,6 +132,24 @@ describe.skipIf(!enabled)('PostgreSQL composition through the API', () => {
 
     expect(response.statusCode).toBe(404);
     expect(response.json()).toMatchObject({ error: { code: 'POST_NOT_FOUND' } });
+  });
+
+  it('refuses one tenant a reply to the other tenant comment, over HTTP', async () => {
+    // The read-path version of this exists above; the write path is the one
+    // with a real consequence — a reply published under someone else's name —
+    // and had no test at the HTTP layer (second sweep).
+    const listed = await list(tenantA.accountId, tenantA.postId);
+    const commentId = listed.json().data[0].id;
+
+    const response = await application.inject({
+      method: 'POST',
+      url: `/v2/comments/${commentId}/replies`,
+      headers: { 'x-account-id': tenantB.accountId, 'idempotency-key': crypto.randomUUID() },
+      payload: { body: 'Not my comment' },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ error: { code: 'COMMENT_NOT_FOUND' } });
   });
 
   it('treats a malformed identifier as absent rather than failing the cast', async () => {

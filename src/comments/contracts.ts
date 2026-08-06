@@ -61,7 +61,16 @@ export interface CommentRepository {
   ): Promise<Comment | null>;
   /** Translates an internal identity back to the provider identifier (ADR-0010). */
   resolveExternalId(context: TenantContext, commentId: string): Promise<string | null>;
-  /** Stores observations and returns them with the identities persistence assigned. */
+  /**
+   * Stores observations and returns them with the identities persistence
+   * assigned.
+   *
+   * Return order and cardinality are unspecified: the PostgreSQL adapter reads
+   * the batch back in one query with no ORDER BY, and a batch spanning more
+   * than one connection may return fewer rows than it was given. Callers must
+   * match on `externalId`, not on position — every caller today either passes a
+   * single-item batch or ignores the result (Spec-024).
+   */
   upsertMany(
     context: TenantContext,
     observed: readonly ObservedComment[],

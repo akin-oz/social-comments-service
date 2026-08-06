@@ -67,6 +67,27 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     posts = new PostgresPostRepository(database);
     operations = new PostgresReplyOperationRepository(database);
 
+    // Gate the whole file on the service role being ordinary. The drift test
+    // below elevates it cluster-wide and restores it in `finally`; if a hard
+    // kill ever skips that restore, every isolation assertion here would pass
+    // for the wrong reason. Checking on entry — rather than relying on the
+    // in-file assertion appearing before the drift test in declaration order —
+    // makes a leaked elevation fail loudly at setup instead (second sweep).
+    const roleGate = await database.withTenant(
+      tenantA.accountId,
+      async (tx) =>
+        (
+          await tx.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
+            `select rolsuper, rolbypassrls from pg_roles where rolname = current_user`,
+          )
+        ).rows[0],
+    );
+    if (roleGate?.rolsuper || roleGate?.rolbypassrls) {
+      throw new Error(
+        'comments_app entered the suite holding SUPERUSER or BYPASSRLS — a previous run leaked an elevation; reset with `docker compose down -v`',
+      );
+    }
+
     scratchPostId = crypto.randomUUID();
     const owner = new Client({ connectionString: ownerUrl });
     await owner.connect();
@@ -1064,6 +1085,32 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
         after: { publishedAt: '2026-08-01T10:00:00.000Z', id: 'not-a-uuid' },
       }),
     ).resolves.toEqual({ items: [], hasMore: false });
+  });
+
+  it('returns every stored comment of a batch, matched by external id not position', async () => {
+    // The two adapters are one port. The PostgreSQL read-back has no ORDER BY,
+    // so a caller reading stored[i] positionally would be right in memory and
+    // wrong here; the contract says match on externalId (Spec-024).
+    const ids = [
+      `batch-a-${crypto.randomUUID()}`,
+      `batch-b-${crypto.randomUUID()}`,
+      `batch-c-${crypto.randomUUID()}`,
+    ];
+    const stored = await comments.upsertMany(
+      contextA,
+      ids.map((externalId, index) => ({
+        ...comment(tenantA, externalId, `2026-08-01T2${index}:00:00.000Z`),
+        postId: scratchPostId,
+      })),
+    );
+
+    // Every input is represented exactly once, keyed by the provider id.
+    const byExternal = new Map(stored.map((row) => [row.id, row]));
+    expect(byExternal.size).toBe(3);
+    for (const externalId of ids) {
+      const match = await comments.findReplyByExternalId(contextA, stored[0]!.id, externalId);
+      expect(match).not.toBeNull();
+    }
   });
 
   it('breaks a keyset tie on id, so comments sharing a timestamp all page through', async () => {
