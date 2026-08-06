@@ -134,12 +134,14 @@ The service sets no `Strict-Transport-Security`, `Content-Security-Policy`, or `
 
 Two roles exist, and the separation is what makes tenant isolation real rather than nominal (ADR-0012).
 
-| Role             | Used by                | Why                                                                   |
-| ---------------- | ---------------------- | --------------------------------------------------------------------- |
-| `comments_owner` | migrations and seeding | Owns the schema. Typically a superuser locally.                       |
-| `comments_app`   | the running service    | Owns nothing and is not a superuser, so the RLS policies apply to it. |
+| Role             | Used by                | Why                                                                                                                             |
+| ---------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `comments_owner` | migrations and seeding | Owns the schema. A superuser locally; on managed PostgreSQL, the provider's owner role, which is typically **not** a superuser. |
+| `comments_app`   | the running service    | Owns nothing and is not a superuser, so the RLS policies apply to it.                                                           |
 
 **The service must never connect as a superuser or as the schema owner.** PostgreSQL exempts superusers and `BYPASSRLS` roles from row-level security unconditionally, and exempts a table's owner unless the table is set to `FORCE ROW LEVEL SECURITY`. A deployment that shares one credential between migrations and the service silently disables tenant isolation while `\d` still reports the policies as enabled.
+
+On **managed PostgreSQL**, the migrating role is not a superuser, so migration 006 cannot clear `SUPERUSER`/`BYPASSRLS` from `comments_app` — it warns and continues. That is safe because the role is created without those attributes in the first place (migration 002), and because migration 006 then _asserts_ the role holds neither and aborts loudly if it does, which any role can check. Provision `comments_app` without elevated attributes and the assertion passes silently; provision it with them and the migration refuses to complete.
 
 ```bash
 pnpm migrate   # applies migrations/ in order, records them, safe to re-run

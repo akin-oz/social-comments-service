@@ -25,7 +25,35 @@ begin
 end
 $$;
 
-alter role comments_app nosuperuser nobypassrls nocreatedb nocreaterole;
+-- Pinning SUPERUSER/BYPASSRLS off requires SUPERUSER, which the migrating role
+-- is deliberately not on managed PostgreSQL — the deployment ADR-0012 names as
+-- the one that matters. So the pin runs when it can and warns when it cannot,
+-- rather than aborting the whole migration where it is needed most. What is not
+-- conditional is the assertion below: any role can read pg_roles, so the
+-- guarantee that comments_app is ordinary is checked unconditionally and the
+-- migration fails loudly if it is violated, whether or not this run could set
+-- it. (nocreatedb/nocreaterole are ordinary attributes and need no superuser.)
+alter role comments_app nocreatedb nocreaterole;
+
+do $$
+begin
+  alter role comments_app nosuperuser nobypassrls;
+exception
+  when insufficient_privilege then
+    raise warning 'could not clear SUPERUSER/BYPASSRLS on comments_app (not superuser); relying on the assertion below and on it having been created without them';
+end
+$$;
+
+do $$
+declare
+  elevated boolean;
+begin
+  select rolsuper or rolbypassrls into elevated from pg_roles where rolname = 'comments_app';
+  if elevated then
+    raise exception 'comments_app holds SUPERUSER or BYPASSRLS, which defeats every row-level security policy; refusing to complete migration 006';
+  end if;
+end
+$$;
 
 -- 2. Extend row-level security to accounts.
 --

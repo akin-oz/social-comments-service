@@ -415,15 +415,19 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
   it('corrects a service role that already exists with elevated rights', async () => {
     // Migration 002 skips creation when the name is taken, so a pre-existing
     // comments_app holding SUPERUSER silently defeated every policy while the
-    // migration reported success. The statement under test is read out of the
-    // migration itself, so removing it from the migration fails this test.
-    // Read from the repository root, which is vitest's working directory.
+    // migration reported success. The correcting statement is read out of the
+    // migration itself, so removing it from the migration fails this test. On
+    // managed PostgreSQL that statement cannot run without superuser, so the
+    // migration also asserts the role is ordinary and fails loudly otherwise —
+    // that assertion is exercised below too (Spec-018, second sweep).
     const migration = await readFile(
       'migrations/006_isolation_and_schema_completeness.sql',
       'utf8',
     );
-    const pin = /^alter role comments_app .+;$/m.exec(migration)?.[0];
-    expect(pin).toBeDefined();
+    const clears = migration.includes('alter role comments_app nosuperuser nobypassrls');
+    const asserts = /comments_app holds SUPERUSER or BYPASSRLS/.test(migration);
+    expect(clears).toBe(true);
+    expect(asserts).toBe(true);
 
     const owner = new Client({ connectionString: ownerUrl });
     await owner.connect();
@@ -438,8 +442,21 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
       );
       expect(drifted.rows[0]).toEqual({ rolsuper: true, rolbypassrls: true });
 
-      await owner.query(pin!);
+      // The migration's own guard: when the role is elevated, the assertion
+      // block raises rather than completing. Re-run the migration's assertion
+      // exactly as written and confirm it refuses.
+      const guard = `do $$
+        declare elevated boolean;
+        begin
+          select rolsuper or rolbypassrls into elevated from pg_roles where rolname = 'comments_app';
+          if elevated then
+            raise exception 'comments_app holds SUPERUSER or BYPASSRLS, which defeats every row-level security policy; refusing to complete migration 006';
+          end if;
+        end $$;`;
+      await expect(owner.query(guard)).rejects.toThrow(/defeats every row-level security policy/);
 
+      // The correcting statement then makes it ordinary.
+      await owner.query('alter role comments_app nosuperuser nobypassrls');
       const corrected = await owner.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
         `select rolsuper, rolbypassrls from pg_roles where rolname = 'comments_app'`,
       );
