@@ -1,6 +1,8 @@
 # Database design
 
-The repository boundary is implemented with a deterministic in-memory adapter for local tests, and the production target is PostgreSQL 16+ using `migrations/001_initial_schema.sql`. Application code remains independent of the database client.
+The repository boundary is implemented with a deterministic in-memory adapter for local tests, and PostgreSQL 16+ for real. Application code remains independent of the database client.
+
+Seven migrations apply in order under `migrations/`; `001` establishes the schema below and `002`–`007` add the tenant role separation, snapshot completeness, assigned identity, the isolation and constraint work of Spec-018, and the reply-operation lease of Spec-015. The ERD reflects the schema as of `007`.
 
 ## Design goals
 
@@ -65,11 +67,16 @@ erDiagram
     string external_post_id
     string status
     datetime published_at
+    string provider_cursor
+    boolean provider_exhausted
+    datetime provider_completed_at
   }
 
   COMMENT {
     uuid id PK
+    uuid account_id FK
     uuid post_id FK
+    uuid social_account_id FK
     string external_comment_id
     string external_parent_comment_id
     string author_external_id
@@ -82,11 +89,15 @@ erDiagram
 
   REPLY_OPERATION {
     uuid id PK
+    uuid account_id FK
     uuid comment_id FK
     string idempotency_key UK
+    string request_fingerprint
     string status
     uuid resulting_comment_id FK
     text failure_code
+    datetime lease_expires_at
+    string external_reply_id
     datetime created_at
     datetime completed_at
   }
@@ -94,11 +105,11 @@ erDiagram
 
 ## Snapshot completeness
 
-`posts` carries `provider_cursor` and `provider_exhausted` (Spec-013). Together they record how much of a post's provider comment stream has been read into the local snapshot: the continuation for the next unfetched page, and whether the end has been reached.
+`posts` carries `provider_cursor` and `provider_exhausted` (Spec-013), plus `provider_completed_at` (Spec-014). Together they record how much of a post's provider comment stream has been read into the local snapshot: the continuation for the next unfetched page, whether the end has been reached, and when it was last reached.
 
-Without them the service could not distinguish an exhausted provider from one it had never asked, because that knowledge lived only inside a cursor handed to one client. A caller starting pagination fresh was then told a post held fewer comments than it did.
+Without them the service could not distinguish an exhausted provider from one it had never asked, because that knowledge lived only inside a cursor handed to one client. A caller starting pagination fresh was then told a post held fewer comments than it did. `provider_completed_at` was added because exhaustion without a timestamp is a one-way latch: a post read to its end once would hide every comment published afterwards.
 
-The service is granted `update` on just these two columns; everything else about a post remains read-only to it.
+The service is granted `update` on just these three columns; everything else about a post remains read-only to it.
 
 ## Constraints to validate during implementation
 
@@ -106,7 +117,7 @@ The service is granted `update` on just these two columns; everything else about
 - Prefer database row-level security when supported; policies must fail closed without trusted tenant context and be tested across at least two tenants.
 - Unique provider identity within a provider scope, such as `(social_account_id, external_comment_id)`.
 - Unique idempotency key within the authenticated account scope.
-- Index comments by `(post_id, published_at, id)` for deterministic cursor queries.
+- Index comments by `(account_id, post_id, published_at, id)` for deterministic cursor queries. The tenant column leads, because every query is tenant-scoped and the index is useless without it.
 - Index the referencing side of every foreign key that is looked up or cascaded through. PostgreSQL indexes only the referenced side.
 - Constrain `platform` at the database, not only in the validator: the column is the shared fact and the validator is one code path.
 - Define deletion and retention behavior before production use. Migration `006` fixes the referential half of it (see below); automated retention remains open.

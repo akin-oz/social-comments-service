@@ -15,12 +15,12 @@ flowchart LR
   App --> Domain[Comment contracts and shared types]
   App --> Repo[Comment repository interface]
   App --> Registry[Platform provider registry]
-  Repo --> DB[(Future database adapter)]
+  Repo --> DB[(PostgreSQL, or in-memory)]
   Registry --> Providers[Platform adapters]
   Providers --> External[Social platform APIs]
 ```
 
-The diagram describes the implemented boundaries. The default composition uses deterministic in-memory adapters for local execution; production composition can replace them with PostgreSQL and selected provider adapters.
+The diagram describes the implemented boundaries. Two compositions exist and both are real: `DATABASE_URL` selects PostgreSQL, and its absence selects in-memory adapters so the service runs with nothing installed. Seven migrations, row-level security, and a CI-exercised integration suite sit behind the first. The provider side is where the placeholder remains — the registry resolves a deterministic fixture adapter, because no live platform SDK is selected.
 
 ## Dependency direction
 

@@ -37,6 +37,14 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm ai:validate
+      - name: Verify the generated agent instructions match .ai/
+        # ai:validate checks the workspace is structurally valid, not that the
+        # artefacts compiled from it are current. An unsynced edit to .ai/rules
+        # passed every other gate; this is what makes the README's claim that
+        # drift fails the build actually true.
+        run: |
+          pnpm ai:sync
+          git diff --exit-code CLAUDE.md AGENTS.md .claude .codex
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm format:check
