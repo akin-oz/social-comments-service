@@ -80,6 +80,35 @@ Reading the vendor documentation surfaced three items that need a decision befor
 - [x] **Assumption A-005 does not hold for X.** Closed by [ADR-0014](decisions/0014-reply-depth.md). One level is now stated as this service's normalisation rather than a claim about platforms, and it is enforced: replying to a comment that is itself a reply is refused with `REPLY_DEPTH_EXCEEDED` (422). Neutralising the check turns two tests red. Instagram's silent reattachment of a reply-to-a-reply remains unmodelled and is recorded in the capability matrix.
 - [x] **Spec-013 persisted provider cursors, which Meta documents against.** Spec-014 keeps the stored continuation but treats it as best-effort: a rejected cursor restarts the stream, and the public cursor no longer carries a provider token at all.
 
+## Raised by the second delivery-readiness sweep
+
+Five investigators re-ran the board after the review-board remediation landed. The suite was green, both compositions worked end to end, and tenant isolation held under a live mutation — and they still found one product defect, one broken demo, and a tail of tests that could not fail.
+
+### Closed
+
+- [x] **The README's reply demo returned `COMMENT_NOT_FOUND` for anyone following it verbatim.** It hardcoded an identifier from the era before [ADR-0013](decisions/0013-assigned-comment-identity.md), when identity was derived and therefore predictable. Reproduced on both the pnpm and Docker paths, then fixed to read the identifier out of the list response. The identity and reply paragraphs in the README described the superseded designs too.
+- [x] **The pooled-connection isolation test could not fail.** It asserted on a brand-new `pg.Client`, which is empty whatever the code does; flipping `set_config`'s `is_local` flag left it green. It now commits early through the session the port hands out, which is the only place a leaked value is observable.
+- [x] **Transaction rollback, both uuid guards, the parent-join scope, the tenant half of the single-flight key, the compare-and-set baseline, `REPLY_LEASE_MS`, the three reachable validator call sites, the bounded join wait, the metrics port, `Retry-After` rounding, and the warn-not-error rule** were all removable or mutable with the suite green. Each now has a test demonstrated red under its mutation. The bounded join wait needed fake timers to discriminate at all, since a plain `await` waits just as long.
+- [x] **The fail-closed production guard had no coverage** and lived in a file no test imports and no CI step runs. Extracted to `chooseComposition(env)` and tested.
+- [x] **Fixture uniformity, again.** Every seed tenant had one social account, making the parent join's connection scope unreachable. A second Instagram connection for tenant A fixes it — and immediately exposed [Spec-024](../specs/024-connection-scoped-lookups.md).
+- [x] **Two integration tests rotted against a persistent compose stack**, failing after roughly fifty runs as rows accumulated, while their own comments claimed re-runnability. They use a post created for the run now.
+- [x] **One leg of the RLS proof was vacuous in CI**: the `reply_operations` count ran before any tenant-B operation existed, and CI is always fresh. The row is created in `beforeAll`.
+- [x] **The role-drift test raced the composition suite**, elevating a cluster-wide privilege while another file probed isolation. `fileParallelism` is off for the database suites.
+- [x] **CI had no drift check for the `.ai/`-generated artefacts.** `ai:validate` checks structural validity, not staleness; an unsynced edit passed every gate. CI now regenerates and diffs them.
+- [x] **A literal NUL byte made the largest source file binary** to git and grep, excluding it from text search including secret scans over `git log -p`.
+- [x] **Stale documentation**: the ERD was three migrations behind, `database.md` understated the granted snapshot columns and omitted `account_id` from an index it names, the capability matrix still said "revisit ADR-0010", the architecture diagram still called PostgreSQL a future adapter, the README roadmap stopped at milestone 8 of 11, and "review board" was unexplained jargon at first use.
+- [x] **Dead code and unshaped logging**: `toFailureReason` had no consumer, the route-scoped public-path allowlist exempted nothing and was a bypass shape waiting for a route, and the listen-failure log was the one call site handing an unshaped error object to the serializer.
+- [x] **Install and posture notes** now in the operations guide: the `codeload.github.com` reachability requirement, the five development-only advisories and why they are recorded rather than bumped, the `log_statement=ddl` hazard when the migration sets the service role's password, and why no security response headers are set behind an internal gateway.
+
+### Open, and specified
+
+- [ ] **Pagination silently truncates past the hydration budget and then reports completion.** Specified as [Spec-021](../specs/021-bounded-pagination-honesty.md). Reproduced: sixty comments behind a newest-first provider one page at a time returns twenty and a null cursor, having fetched all sixty. A restart recovers them, so nothing is lost from the database — only from the run. This is the defect Spec-014 exists to fix, returning at a scale its fixture never reached.
+- [ ] **Client-triggered transport errors become 500s with error-level stack traces**, no explicit body limit is set, `X-Request-Id` is trusted verbatim into every log record, and an unknown route escapes the error envelope. Specified as [Spec-022](../specs/022-transport-and-request-hygiene.md).
+- [ ] **The idempotency fingerprint neither provably binds the comment nor resists guessing.** Specified as [Spec-023](../specs/023-idempotency-binding-integrity.md): reducing it to `sha256(body)` survives, and the unsalted digest beside `comment_id` is a dictionary-confirmable oracle for short reply bodies.
+- [ ] **`findByExternalId` is ambiguous when one tenant has two connections.** Specified as [Spec-024](../specs/024-connection-scoped-lookups.md). Found by the two-connection fixture added above: the reconciliation path can complete an operation against a reply published through a different connection.
+- [ ] **`FORBIDDEN` / `account_not_permitted` is declared and documented but unreachable** — no producer, and no 403 in any response set. Either a producer or a removal; folded into [Spec-022](../specs/022-transport-and-request-hygiene.md) as part of the taxonomy review.
+- [ ] **`validateComment` is called by nothing in `src/`.** Wiring it into the repositories would turn a mapper defect into a typed failure rather than a malformed response — worth doing, a behaviour change, recorded in [testing.md](testing.md) and left for a spec.
+
 ## Raised by the delivery-readiness review
 
 The repository's own read-only review board swept it before submission. Documentation findings are fixed; the rest are recorded here because they touch code, tests, or migrations and so need a specification under this repository's gate.

@@ -85,6 +85,18 @@ Logs never contain comment bodies, author display names, credentials, or provide
 
 `LOG_LEVEL` sets verbosity and defaults to `info`. Metric counters and timings are emitted at `debug` in compositions that have not selected a metrics backend, so `pnpm dev` shows them without a collector.
 
+## Install and supply chain
+
+`pnpm install` fetches `@akinlabs/ai-engineering` from a pinned GitHub tarball, so an install needs reachability to `codeload.github.com` as well as to the npm registry. Behind a proxy that allowlists only the registry, the install fails on that one dependency; it is a development tool and is absent from the `--prod` runtime image.
+
+The current advisory set is five findings, all in the `vitest`/`vite`/`esbuild` development chain and none present in the production image. They are recorded rather than bumped, because bumping a test runner on the eve of a submission trades a real regression risk for a theoretical one that does not reach the deployed artefact.
+
+`pnpm migrate` sets the service role's password with `alter role … password`. DDL cannot take a bound parameter, so the value is escaped as a literal rather than interpolated raw — but a server configured with `log_statement = ddl` or `all` will write that statement, and therefore the password, to the PostgreSQL log. Either leave `log_statement` at its default of `none` while migrating, or set a pre-computed SCRAM verifier instead of a plaintext password.
+
+## Security response headers
+
+The service sets no `Strict-Transport-Security`, `Content-Security-Policy`, or `X-Content-Type-Options`. That is deliberate for a JSON API behind an internal gateway (A-001): the gateway terminates TLS and is the correct place to set transport and browser policy, and none of these headers changes what a JSON client does. Exposing this service directly to browsers would require them, and would require a real credential check in front of it first — the same boundary A-001 already draws.
+
 ## Database roles, migrations, and seeding
 
 Two roles exist, and the separation is what makes tenant isolation real rather than nominal (ADR-0012).

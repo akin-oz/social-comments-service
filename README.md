@@ -20,14 +20,14 @@ This is not intended to be a CRUD wrapper. The design treats external platforms 
 
 ### What the brief asked for, and where it is
 
-| Asked for                      | Where                                                                                                           |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| Database schema                | [docs/database.md](docs/database.md) for the model, [migrations/](migrations/) for the SQL                      |
-| API design                     | [docs/api-design.md](docs/api-design.md), with [docs/openapi.json](docs/openapi.json) generated from the routes |
-| Relevant TypeScript code       | [src/](src/) — start at [comment-service.ts](src/comments/comment-service.ts), the two operations in one file   |
-| Explanation of major decisions | [Design decisions](#design-decisions) below, seven of them with their costs                                     |
-| Documented assumptions         | [docs/assumptions.md](docs/assumptions.md), eleven numbered and referenced from the code                        |
-| How AI tools were used         | [AI usage disclosure](#ai-usage-disclosure) below                                                               |
+| Asked for                      | Where                                                                                                                                                                                                                                        |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database schema                | [docs/database.md](docs/database.md) for the model, [migrations/](migrations/) for the SQL                                                                                                                                                   |
+| API design                     | [docs/api-design.md](docs/api-design.md), with [docs/openapi.json](docs/openapi.json) generated from the routes                                                                                                                              |
+| Relevant TypeScript code       | [src/](src/) — the two operations are [`listComments`](src/comments/comment-service.ts#L146) and [`replyToComment`](src/comments/comment-service.ts#L233); [contracts.ts](src/comments/contracts.ts) is the shorter read for the shape of it |
+| Explanation of major decisions | [Design decisions](#design-decisions) below, seven of them with their costs                                                                                                                                                                  |
+| Documented assumptions         | [docs/assumptions.md](docs/assumptions.md), eleven numbered and referenced from the code                                                                                                                                                     |
+| How AI tools were used         | [AI usage disclosure](#ai-usage-disclosure) below                                                                                                                                                                                            |
 
 ## Design decisions
 
@@ -104,10 +104,11 @@ This starts PostgreSQL, applies migrations and seeds two tenants as a one-shot s
 ### Without a database
 
 ```bash
+pnpm install   # if you have not already
 pnpm dev
 ```
 
-In-memory repositories and the fixture provider, so nothing needs installing. The comment snapshot starts empty either way, so the first read exercises provider-backed hydration rather than seeded data.
+In-memory repositories and the fixture provider, so no database is needed. The comment snapshot starts empty either way, so the first read exercises provider-backed hydration rather than seeded data.
 
 ```bash
 curl 'http://localhost:3000/v2/posts/2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b002/comments?limit=2' -H 'X-Account-Id: 2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b001'
