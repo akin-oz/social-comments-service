@@ -152,6 +152,7 @@ The expected workflow is:
 9. Provider-backed reads, keyset pagination, and reply-path reliability.
 10. Submission readiness: capability research, OpenAPI, design-decision summary.
 11. Review-board findings: reply lifecycle, provider credentials, error reasons, isolation, load, test integrity.
+12. Second readiness sweep: bounded-pagination honesty, transport hygiene, fingerprint integrity, connection-scoped lookups.
 
 The detailed definition of done for each milestone is in [roadmap.md](docs/roadmap.md), and [operations.md](docs/operations.md) covers observability, database roles, migrations, and failure handling.
 
@@ -190,7 +191,7 @@ CI runs `pnpm ai:validate` alongside typecheck, lint, formatting, and tests, so 
 
 ## Status
 
-All twenty approved specifications and fourteen ADRs are implemented. Retrieving comments for a published post and replying to a comment both work end to end, on PostgreSQL and on in-memory adapters, demonstrable with the commands above.
+All twenty-four approved specifications and fourteen ADRs are implemented. Retrieving comments for a published post and replying to a comment both work end to end, on PostgreSQL and on in-memory adapters, demonstrable with the commands above.
 
 The PostgreSQL adapter is exercised against a real database. Tenant isolation is proven by a test that removes the repository's own `account_id` predicate and confirms another tenant's rows stay invisible across all five tenant-scoped tables, by a second test that reads `pg_roles` to confirm the service role holds neither `SUPERUSER` nor `BYPASSRLS`, and by a third that deliberately drifts that role and asserts the migration corrects it. CI runs the suite against a PostgreSQL service container.
 

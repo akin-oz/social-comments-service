@@ -209,6 +209,34 @@ Nothing blocks submission. The README now states the seven decisions that shaped
 
 The capability matrix is grounded in vendor documentation for all five platforms, which both justifies the provider abstraction and raised three items. All three are now closed: ADR-0013 replaced the identifier derivation with assigned identity, Spec-014 made the stored provider cursor best-effort with a restart on rejection, and ADR-0014 turned A-005 from an assumption about platforms into an enforced normalisation of this service's own.
 
+## Milestone 12 — Second delivery-readiness sweep
+
+Status: Done
+
+### Goal
+
+Re-run the readiness board against the remediated repository, and close what it finds.
+
+### What it found
+
+The suite was green at 161 tests, both compositions served real HTTP, and tenant isolation held under a live mutation. It still found one product defect, one broken demo, and a long tail of tests that could not fail.
+
+| Finding                                                         | Closed by | Proved by                                                           |
+| --------------------------------------------------------------- | --------- | ------------------------------------------------------------------- |
+| A deep cursor walk returned 20 of 60 and reported completion    | Spec-021  | The reproduction is a test; three mutations of the fix turn it red  |
+| Oversized bodies and bad JSON became 500s with stack traces     | Spec-022  | Both asserted at 4xx with nothing reaching error level              |
+| `X-Request-Id` trusted verbatim into every log record           | Spec-022  | A 229-character value no longer reaches the response                |
+| The fingerprint did not provably bind the comment               | Spec-023  | One key replayed against two parents now conflicts                  |
+| The fingerprint was a dictionary oracle for short bodies        | Spec-023  | HMAC; the digest cannot be recomputed without the secret            |
+| `findByExternalId` ambiguous under two connections              | Spec-024  | The wrong-connection row exists and is not the one resolved         |
+| Fourteen service and persistence behaviours mutable while green | Spec-020  | Each re-applied and shown red, including the pooled-connection leak |
+| The README's reply demo 404'd verbatim                          | —         | Run against Docker, end to end, before and after                    |
+| No CI drift check for the generated `.ai/` artefacts            | —         | `pnpm ai:sync && git diff --exit-code` added                        |
+
+### Definition of done
+
+Every finding closed with a demonstrated failing mutation, or recorded as a deliberate limitation with its reasoning. What remains recorded rather than fixed: `validateComment` is defined and tested but wired into nothing, and `validatePagination`'s call site is an unreachable defensive assertion no test can kill — both stated in [testing.md](testing.md) rather than given tests that would only re-test their validator.
+
 ## Milestone 11 — Review-board findings
 
 Status: Done
