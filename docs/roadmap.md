@@ -270,3 +270,9 @@ Eighteen items. Five were already fixed and double-counted across the two report
 ### Definition of done
 
 Every finding either closed with a demonstrated failing mutation, or recorded as a deliberate limitation with its reasoning. Two limitations are recorded rather than fixed: single-flight deduplication is per replica, and the model still cannot represent a reply whose resolved parent differs from the requested one, which Instagram does silently.
+
+## Beyond submission — deliberately deferred
+
+The service answers the brief's two synchronous operations on demand. The capability a production deployment would reach for next is **real-time / broadcast comment delivery**: pushing new comments to clients as they arrive instead of only on a read. It is deferred on purpose, not overlooked.
+
+Its prerequisite is the one the assignment scopes out — **webhook ingestion** ([A-006](assumptions.md)). Platforms deliver new comments by webhook, not by poll, so real-time delivery starts with an inbound path that normalises a provider webhook through the existing `PlatformProvider` contract, persists it into the same snapshot the read path already serves, then fans the comment out (server-sent events, a WebSocket, or an outbound webhook of our own). The normalisation and persistence seams already exist; the missing pieces are the ingress, the fan-out, and the worker topology [ADR-0009](decisions/0009-production-polish.md) adds only on a demonstrated need. The single structural change it motivates is already named against the read path: extracting a `SnapshotHydrator` behind a single-flight port, so ingestion reaches the snapshot loop without calling a read for its side effects ([tasks.md](tasks.md)). Real-time delivery, broadcast fan-out, and background reconciliation remain future work under A-006 and ADR-0009.
