@@ -1,0 +1,62 @@
+-- Spec-031: index gaps the principal review found, and the constraint-safety
+-- convention every migration after this one follows.
+--
+-- Nothing here changes behaviour. Both index problems are invisible today —
+-- one because nothing deletes comments yet, the other because no tenant has
+-- ever been deleted — and both are exactly what the deferred retention work
+-- would hit first, on the one table that grows without bound.
+
+-- 1. Order the reply-operations index for the lookup it exists to serve.
+--
+-- `reply_operations_comment_idx (account_id, comment_id)` was built leading
+-- with account_id, but the index exists for the foreign key on comment_id
+-- alone, and PostgreSQL's referential-integrity check runs
+-- `where comment_id = $1` with no account predicate — it is enforcing a
+-- constraint, not answering a tenant's query. A composite index is only usable
+-- for a lookup that constrains its leading column, so the RI check fell back to
+-- a sequential scan of reply_operations on every comment delete.
+--
+-- Leading with comment_id serves the RI check and still serves any
+-- (account_id, comment_id) lookup, just as a non-leading equality.
+drop index if exists reply_operations_comment_idx;
+create index reply_operations_comment_idx on reply_operations (comment_id, account_id);
+
+-- 2. Index the referencing side of posts.account_id.
+--
+-- `posts_account_id_fkey` cascades from accounts, and PostgreSQL indexes only
+-- the referenced side, so deleting a tenant sequentially scanned posts. The
+-- other three cascading keys got this treatment in migration 006; this one was
+-- missed.
+create index if not exists posts_account_idx on posts (account_id);
+
+-- 3. The convention for every constraint change after this migration.
+--
+-- Migrations 006 and 007 add and re-add foreign keys and CHECK constraints
+-- without NOT VALID. PostgreSQL then validates by scanning the whole
+-- referencing table under ACCESS EXCLUSIVE, which blocks every read and write
+-- — including listByPost and upsertMany — for the duration of the scan.
+--
+-- That was safe when it ran, because the tables were empty or nearly so. It is
+-- not safe as a template: `comments` is the one table with unbounded growth,
+-- and the next constraint change written by copying migration 006 would take
+-- the service down for the length of a full scan.
+--
+-- From here on, any constraint added to comments, social_accounts, or
+-- reply_operations must be added NOT VALID and validated in a separate
+-- statement:
+--
+--   alter table comments
+--     add constraint comments_something_check check (...) not valid;
+--   alter table comments validate constraint comments_something_check;
+--
+-- ADD ... NOT VALID takes a brief lock and skips the scan; VALIDATE takes only
+-- SHARE UPDATE EXCLUSIVE, which readers and writers pass through. New rows are
+-- checked from the moment the constraint exists either way.
+--
+-- One consequence worth stating: `src/migrate.ts` wraps each file in a single
+-- transaction, which is what makes a failed migration leave nothing behind.
+-- That also forecloses CREATE INDEX CONCURRENTLY, which cannot run inside a
+-- transaction block. Both indexes above are small enough for a plain CREATE
+-- INDEX; an index on comments at scale needs a runner that can opt out of the
+-- wrapping transaction, and that is recorded in docs/roadmap.md rather than
+-- solved here.
