@@ -4,6 +4,11 @@ An extensible comment service for a social media scheduling platform.
 
 This repository implements the Blotato Senior Software Engineer take-home assignment. Both required operations — retrieving comments for a published post and replying to a comment — work end to end: on PostgreSQL with verified tenant isolation, and on in-memory adapters so the service runs with nothing installed. No live social platform SDK is selected; a deterministic fixture provider stands behind the same contract a real one would implement.
 
+> **Live demo — [`https://comments.akinoztorun.dev`](https://comments.akinoztorun.dev)**
+> Interactive API docs (Swagger UI) at [`/documentation`](https://comments.akinoztorun.dev/documentation); the OpenAPI 3.1 document at [`/openapi.json`](https://comments.akinoztorun.dev/openapi.json). The two demo tenants are seeded there, so every example request below works against it by swapping `http://localhost:3000` for `https://comments.akinoztorun.dev`. Running on Fly.io with a PostgreSQL cluster; the service connects as a least-privileged, non-superuser role, so the row-level tenant isolation is enforced in the deployment, not only in tests. It scales to zero, so the first request after an idle spell wakes it in a second or two.
+>
+> One honest caveat: the demo trusts the `X-Account-Id` header with no gateway in front of it (assumption [A-001](docs/assumptions.md)). That is correct for a public demo of the service in isolation, and is exactly why a real deployment puts an authenticating gateway ahead of it — pass any seeded account ID to explore, but nothing sensitive lives behind it.
+
 ## Project overview
 
 The service will provide a stable REST API for retrieving comments on a published post and replying to a comment across multiple social platforms. Platform-specific APIs, credentials, rate limits, and response formats are kept behind provider interfaces so that the application layer remains independent of any one platform.
