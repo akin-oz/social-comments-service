@@ -444,8 +444,12 @@ describe('comment REST API', () => {
 
     const requestId = response.json().error.requestId as string;
     expect(requestId).not.toBe(forged);
-    expect(requestId).not.toContain('ffff');
-    expect(requestId.length).toBeLessThan(64);
+    // A generated UUID, not the forged header echoed back. Asserting the shape
+    // is deterministic; the earlier `.not.toContain('ffff')` could fail once in
+    // ~16k runs, since a real UUID hex group is four characters and may be all
+    // f's — a flaky assertion in the suite the repository asks reviewers to
+    // trust.
+    expect(requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     await app.close();
   });
 

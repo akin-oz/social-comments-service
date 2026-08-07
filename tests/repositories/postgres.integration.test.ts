@@ -259,6 +259,44 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     });
   });
 
+  it('refuses a stale writer that only the exhausted flag distinguishes', async () => {
+    // Both this test and the one above guard the compare-and-set, but that one
+    // discriminates on the cursor; the CAS also compares provider_exhausted,
+    // and dropping that term from the query survived every test (Spec-019, held
+    // to the standard in docs/testing.md). Run on the scratch post and rebased
+    // to a known baseline first, so it is deterministic against a database that
+    // already holds rows.
+    const start = (await posts.findPublishedById(contextA, scratchPostId))!.snapshot;
+    const baseline = { providerCursor: 'cas-exhausted-base', exhausted: false, completedAt: null };
+    await expect(posts.saveSnapshotState(contextA, scratchPostId, baseline, start)).resolves.toBe(
+      true,
+    );
+
+    // Same cursor as the baseline throughout; only exhaustion changes.
+    const completed = {
+      providerCursor: 'cas-exhausted-base',
+      exhausted: true,
+      completedAt: '2026-08-02T00:00:00.000Z',
+    };
+    const staleReopen = {
+      providerCursor: 'cas-exhausted-base',
+      exhausted: false,
+      completedAt: null,
+    };
+
+    await expect(
+      posts.saveSnapshotState(contextA, scratchPostId, completed, baseline),
+    ).resolves.toBe(true);
+    // Still holding `baseline`, which now differs from stored only in exhausted.
+    await expect(
+      posts.saveSnapshotState(contextA, scratchPostId, staleReopen, baseline),
+    ).resolves.toBe(false);
+
+    await expect(posts.findPublishedById(contextA, scratchPostId)).resolves.toMatchObject({
+      snapshot: { exhausted: true },
+    });
+  });
+
   it('cannot advance another tenant snapshot state', async () => {
     const before = await posts.findPublishedById(contextB, tenantB.postId);
     // Row-level security makes this update match nothing rather than fail loudly.

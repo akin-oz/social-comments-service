@@ -1178,6 +1178,33 @@ describe('provider load under concurrency', () => {
       snapshot: { providerCursor: 'page-9' },
     });
   });
+
+  it('refuses a stale writer that only the exhausted flag distinguishes', async () => {
+    // The compare-and-set guards on the cursor AND provider_exhausted. Every
+    // other CAS test discriminates on the cursor, so dropping the exhausted
+    // half of the comparison left the suite green while a stale writer could
+    // reopen a completed snapshot — moving it from exhausted back to not
+    // (Spec-019, held to the standard in docs/testing.md).
+    const posts = new InMemoryPostRepository([post]);
+    const start = (await posts.findPublishedById(tenant, post.id))!.snapshot;
+    // Same cursor throughout; only exhaustion changes, so exhaustion is the
+    // sole discriminator.
+    const completed = {
+      providerCursor: null,
+      exhausted: true,
+      completedAt: '2026-08-02T00:00:00.000Z',
+    };
+    const staleReopen = { providerCursor: null, exhausted: false, completedAt: null };
+
+    await expect(posts.saveSnapshotState(tenant, post.id, completed, start)).resolves.toBe(true);
+    // A writer still holding the pre-completion state, differing from stored
+    // only in the exhausted flag.
+    await expect(posts.saveSnapshotState(tenant, post.id, staleReopen, start)).resolves.toBe(false);
+
+    await expect(posts.findPublishedById(tenant, post.id)).resolves.toMatchObject({
+      snapshot: { exhausted: true },
+    });
+  });
 });
 
 describe('provider authorization context', () => {
