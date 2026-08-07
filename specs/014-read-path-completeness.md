@@ -7,6 +7,10 @@ owner: platform-integration
 depends_on:
   - Spec-008
   - Spec-013
+paths:
+  - src/comments/**
+  - src/repositories/**
+  - migrations/**
 ---
 
 # Spec-014: Make the read path reachable, refreshable, and honest about freshness

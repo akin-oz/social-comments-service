@@ -7,6 +7,14 @@ owner: platform and operations
 depends_on:
   - ADR-0012
   - ADR-0009
+paths:
+  - src/migrate.ts
+  - src/seed.ts
+  - src/seed-data.ts
+  - src/repositories/database.ts
+  - migrations/**
+  - docker-compose.yml
+  - Dockerfile
 ---
 
 # Spec-012: Run the service on PostgreSQL with verified tenant isolation

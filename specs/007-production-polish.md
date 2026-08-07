@@ -9,6 +9,15 @@ depends_on:
   - Spec-004
   - Spec-005
   - Spec-006
+paths:
+  - package.json
+  - tsconfig.json
+  - tsconfig.build.json
+  - eslint.config.js
+  - eslint.config.mjs
+  - .github/**
+  - Dockerfile
+  - fly.toml
 ---
 
 # Spec 007: Harden the service for production-oriented review

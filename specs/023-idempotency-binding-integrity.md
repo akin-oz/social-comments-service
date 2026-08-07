@@ -7,6 +7,9 @@ owner: platform-integration
 depends_on:
   - Spec-010
   - Spec-015
+paths:
+  - src/comments/**
+  - migrations/**
 ---
 
 # Spec-023: Make the idempotency fingerprint bind what it claims to bind

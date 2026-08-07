@@ -9,6 +9,8 @@ depends_on:
   - Spec-001
   - Spec-002
   - Spec-003
+paths:
+  - src/api/**
 ---
 
 # Spec 004: Implement the versioned comment REST API

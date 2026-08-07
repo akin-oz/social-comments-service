@@ -6,6 +6,11 @@ approved: yes
 owner: verification
 depends_on:
   - Spec-005
+paths:
+  - tests/**
+  - .github/**
+  - .githooks/**
+  - scripts/**
 ---
 
 # Spec-020: Close the gaps where a real defect would keep the suite green

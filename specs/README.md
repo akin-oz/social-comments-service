@@ -11,8 +11,12 @@ title: <short imperative title>
 status: proposed
 approved: no
 owner: <area>
+paths:
+  - src/area/**
 ---
 ```
+
+`paths:` is what the spec gate evaluates. Each entry is a repository-relative glob where `**` matches any number of segments, and a change is allowed only when some approved spec claims the path being written. Before [Spec-032](032-spec-gate-path-claims.md) the hook asked instead whether _any_ file in `specs/` was approved — which all 25 were — so it passed unconditionally for every path. A spec with no `paths:` claims nothing.
 
 The authoring agent may create or revise a proposal, but only the human maintainer may change `approved: no` to `approved: yes`. Agents must stop when an applicable spec is missing or not approved.
 

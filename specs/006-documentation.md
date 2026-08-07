@@ -6,6 +6,9 @@ approved: yes
 owner: documentation
 depends_on:
   - ADR-0008
+paths:
+  - docs/**
+  - README.md
 ---
 
 # Spec 006: Complete engineering and operational documentation

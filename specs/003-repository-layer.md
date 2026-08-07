@@ -8,6 +8,9 @@ depends_on:
   - ADR-0001
   - ADR-0005
   - Spec-001
+paths:
+  - src/repositories/**
+  - src/comments/contracts.ts
 ---
 
 # Spec 003: Implement normalized comment repositories

@@ -4,6 +4,10 @@ title: Keyset pagination using deterministic sort order
 status: accepted
 approved: yes
 owner: data-access
+paths:
+  - src/shared/cursor.ts
+  - src/repositories/**
+  - src/api/**
 ---
 
 # Spec-009: Keyset pagination using deterministic sort order

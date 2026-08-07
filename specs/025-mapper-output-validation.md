@@ -8,6 +8,9 @@ depends_on:
   - Spec-005
   - Spec-017
   - Spec-020
+paths:
+  - src/shared/validation.ts
+  - src/repositories/**
 ---
 
 # Spec-025: Make the domain validator guard the mappers it was written for

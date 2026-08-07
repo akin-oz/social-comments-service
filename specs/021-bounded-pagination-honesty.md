@@ -7,6 +7,9 @@ owner: api
 depends_on:
   - Spec-009
   - Spec-014
+paths:
+  - src/comments/**
+  - src/api/**
 ---
 
 # Spec-021: Stop a bounded pagination run reporting completion it did not reach

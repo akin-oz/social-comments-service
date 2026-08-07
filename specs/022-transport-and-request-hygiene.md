@@ -7,6 +7,9 @@ owner: api
 depends_on:
   - Spec-011
   - Spec-017
+paths:
+  - src/index.ts
+  - src/api/**
 ---
 
 # Spec-022: Stop client mistakes arriving as service failures

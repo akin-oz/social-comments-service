@@ -4,6 +4,10 @@ title: Reply-path reliability — timeouts, retries, and idempotency
 status: accepted
 approved: yes
 owner: platform-integration
+paths:
+  - src/shared/observability.ts
+  - src/comments/**
+  - src/platforms/**
 ---
 
 # Spec-010: Reply-path reliability — timeouts, retries, and idempotency

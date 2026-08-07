@@ -6,6 +6,10 @@ approved: yes
 owner: api
 depends_on:
   - Spec-011
+paths:
+  - src/shared/errors.ts
+  - src/api/**
+  - docs/api-design.md
 ---
 
 # Spec-017: Make every error tell a client what to do next

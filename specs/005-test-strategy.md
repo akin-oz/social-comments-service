@@ -9,6 +9,9 @@ depends_on:
   - Spec-002
   - Spec-003
   - Spec-004
+paths:
+  - tests/**
+  - vitest.config.ts
 ---
 
 # Spec 005: Complete layered test coverage

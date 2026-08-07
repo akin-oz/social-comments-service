@@ -7,6 +7,9 @@ owner: platform and operations
 depends_on:
   - ADR-0012
   - Spec-012
+paths:
+  - migrations/**
+  - src/repositories/**
 ---
 
 # Spec-018: Finish tenant isolation and close the schema gaps behind it

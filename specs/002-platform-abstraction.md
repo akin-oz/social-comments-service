@@ -8,6 +8,8 @@ depends_on:
   - ADR-0001
   - ADR-0004
   - Spec-001
+paths:
+  - src/platforms/**
 ---
 
 # Spec 002: Implement the social platform provider abstraction

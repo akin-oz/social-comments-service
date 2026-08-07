@@ -6,6 +6,10 @@ approved: yes
 owner: platform-integration
 depends_on:
   - Spec-010
+paths:
+  - src/comments/**
+  - src/repositories/**
+  - migrations/**
 ---
 
 # Spec-015: Make a reply operation recoverable and its outcome honest

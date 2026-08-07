@@ -6,6 +6,10 @@ approved: yes
 owner: src/comments and src/shared
 depends_on:
   - ADR-0001
+paths:
+  - src/shared/types.ts
+  - src/shared/validation.ts
+  - src/comments/**
 ---
 
 # Spec 001: Implement the platform-neutral comment domain model

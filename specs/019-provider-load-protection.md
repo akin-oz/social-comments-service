@@ -6,6 +6,8 @@ approved: yes
 owner: platform-integration
 depends_on:
   - Spec-014
+paths:
+  - src/comments/**
 ---
 
 # Spec-019: Stop concurrent readers multiplying provider load

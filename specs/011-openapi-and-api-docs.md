@@ -4,6 +4,10 @@ title: Publish an OpenAPI document and interactive API documentation
 status: accepted
 approved: yes
 owner: api
+paths:
+  - src/openapi.ts
+  - src/api/**
+  - docs/openapi.json
 ---
 
 # Spec-011: Publish an OpenAPI document and interactive API documentation

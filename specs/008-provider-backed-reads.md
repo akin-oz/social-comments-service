@@ -4,6 +4,9 @@ title: Provider-backed comment reads with cache-miss strategy
 status: accepted
 approved: yes
 owner: platform-integration
+paths:
+  - src/comments/**
+  - src/platforms/**
 ---
 
 # Spec-008: Provider-backed comment reads with cache-miss strategy

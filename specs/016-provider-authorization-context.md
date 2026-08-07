@@ -6,6 +6,10 @@ approved: yes
 owner: platform-integration
 depends_on:
   - Spec-002
+paths:
+  - src/platforms/**
+  - src/shared/types.ts
+  - src/repositories/**
 ---
 
 # Spec-016: Give the provider port somewhere to carry a credential

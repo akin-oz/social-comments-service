@@ -7,6 +7,10 @@ owner: platform-integration
 depends_on:
   - Spec-008
   - Spec-009
+paths:
+  - src/comments/**
+  - src/repositories/**
+  - migrations/**
 ---
 
 # Spec-013: Track snapshot completeness so pagination stops lying about more results

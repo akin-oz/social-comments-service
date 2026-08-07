@@ -8,6 +8,9 @@ depends_on:
   - ADR-0013
   - Spec-015
   - Spec-016
+paths:
+  - src/repositories/**
+  - src/comments/**
 ---
 
 # Spec-024: Scope provider-identifier lookups to the connection that issued them
