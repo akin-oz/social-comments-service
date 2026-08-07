@@ -1,8 +1,8 @@
 ---
 spec: 038
 title: Bound snapshot completion by progress and refuse it over a silent restart
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: read path completeness
 depends_on:
   - Spec-013

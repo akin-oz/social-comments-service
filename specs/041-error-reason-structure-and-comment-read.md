@@ -1,8 +1,8 @@
 ---
 spec: 041
 title: Add a single-comment read endpoint and keep reasons flat
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: api contract
 depends_on:
   - Spec-011

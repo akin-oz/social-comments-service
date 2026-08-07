@@ -1,8 +1,8 @@
 ---
 spec: 034
 title: Bound the provider fan-out a single inbound read can cause
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: read path and provider load
 depends_on:
   - Spec-019

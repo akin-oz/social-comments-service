@@ -1,8 +1,8 @@
 ---
 spec: 042
 title: Keep the service-role password out of migration DDL text
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: operations and migrations
 depends_on:
   - Spec-012

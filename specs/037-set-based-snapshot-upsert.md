@@ -1,8 +1,8 @@
 ---
 spec: 037
 title: Store a hydration page in one insert, de-duplicated before the conflict
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: persistence
 depends_on:
   - Spec-027

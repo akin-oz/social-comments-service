@@ -1,8 +1,8 @@
 ---
 spec: 040
 title: Represent comment deletion and Instagram's silent reattachment
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: domain model and persistence
 depends_on:
   - Spec-013

@@ -1,8 +1,8 @@
 ---
 spec: 036
 title: Brand comment and post identifiers and validate their shape at the edge
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: domain model and api edge
 depends_on:
   - Spec-001

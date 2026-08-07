@@ -1,8 +1,8 @@
 ---
 spec: 035
 title: Reject unknown fields on the reply body instead of dropping them
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: api contract
 depends_on:
   - Spec-011

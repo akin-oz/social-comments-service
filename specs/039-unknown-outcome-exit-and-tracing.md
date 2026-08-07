@@ -1,8 +1,8 @@
 ---
 spec: 039
 title: Give an unknown reply operation an exit and a traceable id
-status: proposed
-approved: no
+status: accepted
+approved: yes
 owner: reply lifecycle and observability
 depends_on:
   - Spec-015
