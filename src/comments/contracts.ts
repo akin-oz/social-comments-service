@@ -62,6 +62,24 @@ export interface CommentRepository {
   /** Translates an internal identity back to the provider identifier (ADR-0010). */
   resolveExternalId(context: TenantContext, commentId: string): Promise<string | null>;
   /**
+   * Stores a reply this service just published, and never overwrites a row it
+   * did not create.
+   *
+   * Separate from {@link CommentRepository.upsertMany} because the two want
+   * opposite things from a conflict. Hydration is reconciling with the provider,
+   * so a conflict means "this comment was edited" and taking the new body is
+   * correct. Publication is creating something new, so a conflict means the
+   * provider handed back an identifier that already names a different stored
+   * comment — and sharing hydration's clause there wrote the reply's text over
+   * a customer's own comment, destroying content this service does not own and
+   * cannot recover.
+   *
+   * Re-storing the same reply stays idempotent: the recovery path may run this
+   * twice for one publication, and the second call returns the stored row
+   * unchanged rather than failing (Spec-027).
+   */
+  storePublishedReply(context: TenantContext, reply: ObservedComment): Promise<Comment>;
+  /**
    * Stores observations and returns them with the identities persistence
    * assigned.
    *

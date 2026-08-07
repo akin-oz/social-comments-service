@@ -290,8 +290,16 @@ describe('in-memory reply operation repository', () => {
   });
 
   it('records terminal outcomes with a completion timestamp', async () => {
+    // Two operations, not one. This used to complete an operation and then fail
+    // the same one, which passed only because no transition checked the status
+    // it was leaving — the very overwrite the test below now forbids.
     const operations = new InMemoryReplyOperationRepository();
     await operations.claim(tenant, operation);
+    await operations.claim(tenant, {
+      ...operation,
+      id: 'operation-2',
+      idempotencyKey: 'key-2',
+    });
 
     await expect(operations.complete(tenant, 'operation-1', 'comment-9')).resolves.toMatchObject({
       status: 'completed',
@@ -299,7 +307,44 @@ describe('in-memory reply operation repository', () => {
       completedAt: expect.any(String),
     });
     await expect(
-      operations.fail(tenant, 'operation-1', 'PROVIDER_RATE_LIMITED'),
+      operations.fail(tenant, 'operation-2', 'PROVIDER_RATE_LIMITED'),
     ).resolves.toMatchObject({ status: 'failed', failureCode: 'PROVIDER_RATE_LIMITED' });
+  });
+
+  it('refuses to move an operation that already reached a terminal outcome', async () => {
+    // A writer that finishes late must not rewrite an outcome a client has
+    // already been given. Without the status predicate, `complete` overwrote an
+    // `unknown` and nulled its failure code, so the runbook query for unknown
+    // operations returned nothing while the customer who raised the ticket was
+    // still holding it (Spec-028).
+    const operations = new InMemoryReplyOperationRepository();
+    await operations.claim(tenant, operation);
+    await operations.fail(tenant, 'operation-1', 'PROVIDER_RATE_LIMITED');
+
+    await expect(operations.complete(tenant, 'operation-1', 'comment-9')).rejects.toMatchObject({
+      code: 'INTERNAL_ERROR',
+    });
+    await expect(
+      operations.findByIdempotencyKey(tenant, operation.idempotencyKey),
+    ).resolves.toMatchObject({
+      status: 'failed',
+      failureCode: 'PROVIDER_RATE_LIMITED',
+    });
+  });
+
+  it('reconciles an unknown operation to its reply, and keeps why it was unknown', async () => {
+    // `unknown` is deliberately not a dead end: reconciliation resolving it to
+    // the stored reply is the self-healing path (Spec-015). What must survive
+    // that move is the failure code, the only remaining evidence of what the
+    // client was originally told.
+    const operations = new InMemoryReplyOperationRepository();
+    await operations.claim(tenant, operation);
+    await operations.markUnknown(tenant, 'operation-1', 'PROVIDER_UNAVAILABLE');
+
+    await expect(operations.complete(tenant, 'operation-1', 'comment-9')).resolves.toMatchObject({
+      status: 'completed',
+      resultingCommentId: 'comment-9',
+      failureCode: 'PROVIDER_UNAVAILABLE',
+    });
   });
 });

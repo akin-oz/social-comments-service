@@ -42,6 +42,11 @@ export function validateComment(comment: Comment): void {
     !isValidAuthor(comment.author) ||
     !isNonEmptyString(comment.body) ||
     !isNullableNonEmptyString(comment.parentCommentId) ||
+    typeof comment.parentUnresolved !== 'boolean' ||
+    // A resolved parent and an unresolved one are mutually exclusive by
+    // construction: `parentUnresolved` means the join found nothing, so a row
+    // claiming both is an adapter that computed one of them wrong (ADR-0016).
+    (comment.parentCommentId !== null && comment.parentUnresolved) ||
     !isNonEmptyString(comment.publishedAt) ||
     !isNonEmptyString(comment.updatedAt)
   ) {

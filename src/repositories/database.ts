@@ -25,6 +25,17 @@ export interface Database {
   close(): Promise<void>;
 }
 
+/**
+ * The longest one database call can take: waiting for a pooled connection, then
+ * running the statement.
+ *
+ * Exported because the reply lease has to outlast the work it protects, and
+ * that work is mostly database calls. Deriving the lease from this rather than
+ * from a number in a comment is what keeps the two from drifting apart
+ * (Spec-033).
+ */
+export const DATABASE_CALL_BUDGET_MS = 5_000 + 10_000;
+
 export class PostgresDatabase implements Database {
   private readonly pool: Pool;
 

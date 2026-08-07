@@ -23,6 +23,25 @@ export interface Comment {
   author: ExternalAuthor;
   body: string;
   parentCommentId: string | null;
+  /**
+   * Whether the provider says this comment answers something the service has
+   * not stored yet.
+   *
+   * `parentCommentId` alone cannot say. It is resolved by a LEFT JOIN onto the
+   * comment holding the provider's parent identifier, so a miss and a genuine
+   * top-level comment both produce `null` — and the reply path gates ADR-0014's
+   * one-level rule on exactly that value, so an unresolved parent read as "no
+   * parent" and the reply was permitted.
+   *
+   * That is not an edge case. Meta, X, and YouTube return newest-first, and a
+   * reply is newer than the comment it answers, so replies arrive in earlier
+   * provider pages than their parents. On any post large enough to paginate
+   * against the 20-call bound, an unresolved parent is the normal state.
+   *
+   * True only when the provider named a parent and no stored row holds that
+   * identifier — never for a comment that genuinely has no parent (ADR-0016).
+   */
+  parentUnresolved: boolean;
   publishedAt: string;
   updatedAt: string;
 }

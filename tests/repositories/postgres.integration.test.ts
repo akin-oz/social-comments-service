@@ -443,6 +443,133 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     });
   });
 
+  it('refuses to write a published reply over an existing comment', async () => {
+    // The destructive clause was SQL, so this is the layer that has to prove it
+    // is gone: `on conflict … do update set body = excluded.body` replaced a
+    // customer's comment with the reply text (Spec-027).
+    const shared = `collide-${crypto.randomUUID()}`;
+    const [victim] = await comments.upsertMany(contextA, [
+      comment(tenantA, shared, '2026-08-01T17:00:00.000Z'),
+    ]);
+
+    await expect(
+      comments.storePublishedReply(contextA, {
+        ...comment(tenantA, shared, '2026-08-01T18:00:00.000Z'),
+        body: 'Thanks for reaching out! — from the brand',
+      }),
+    ).rejects.toMatchObject({ reason: 'reply_not_stored' });
+
+    await expect(comments.findById(contextA, victim!.id)).resolves.toMatchObject({
+      body: `body of ${shared}`,
+    });
+  });
+
+  it('stores a published reply once and returns the same row on a repeat', async () => {
+    const external = `reply-${crypto.randomUUID()}`;
+    const reply = {
+      ...comment(tenantA, external, '2026-08-01T19:00:00.000Z'),
+      body: 'Thank you!',
+    };
+
+    const first = await comments.storePublishedReply(contextA, reply);
+    const second = await comments.storePublishedReply(contextA, reply);
+
+    expect(second.id).toBe(first.id);
+    expect(second.body).toBe('Thank you!');
+  });
+
+  it('distinguishes an unsynced parent from no parent at the join', async () => {
+    // The LEFT JOIN answers null for both, which is what let the reply-depth
+    // gate treat a reply as a top-level comment. Only a real database can show
+    // this: the in-memory adapter reproduces the rule, but the rule is the
+    // join, and the two could drift apart without anything noticing (ADR-0016).
+    const orphanExternal = `orphan-${crypto.randomUUID()}`;
+    const [orphan] = await comments.upsertMany(contextA, [
+      {
+        ...comment(tenantA, orphanExternal, '2026-08-01T15:00:00.000Z'),
+        externalParentCommentId: `never-stored-${crypto.randomUUID()}`,
+      },
+    ]);
+    const [topLevel] = await comments.upsertMany(contextA, [
+      comment(tenantA, `top-${crypto.randomUUID()}`, '2026-08-01T15:01:00.000Z'),
+    ]);
+
+    // Both have no resolvable parent row; only one of them is a reply.
+    expect(orphan!.parentCommentId).toBeNull();
+    expect(orphan!.parentUnresolved).toBe(true);
+    expect(topLevel!.parentCommentId).toBeNull();
+    expect(topLevel!.parentUnresolved).toBe(false);
+
+    // And the distinction survives a re-read, not just the write path.
+    const reread = await comments.findById(contextA, orphan!.id);
+    expect(reread?.parentUnresolved).toBe(true);
+  });
+
+  it('clears the unresolved flag once the parent arrives', async () => {
+    // Hydration is what repairs this: the parent lands in a later provider
+    // page, the join starts resolving, and the comment becomes a reply with a
+    // real parent rather than an orphan. If this did not flip, a post would
+    // refuse replies for comments whose parents had since been stored.
+    const parentExternal = `late-parent-${crypto.randomUUID()}`;
+    const [child] = await comments.upsertMany(contextA, [
+      {
+        ...comment(tenantA, `child-${crypto.randomUUID()}`, '2026-08-01T16:00:00.000Z'),
+        externalParentCommentId: parentExternal,
+      },
+    ]);
+    expect(child!.parentUnresolved).toBe(true);
+
+    const [parent] = await comments.upsertMany(contextA, [
+      comment(tenantA, parentExternal, '2026-08-01T15:59:00.000Z'),
+    ]);
+
+    const resolved = await comments.findById(contextA, child!.id);
+    expect(resolved?.parentCommentId).toBe(parent!.id);
+    expect(resolved?.parentUnresolved).toBe(false);
+  });
+
+  it('returns nothing at all when no tenant is set', async () => {
+    // The fail-closed half of the perimeter, claimed at docs/operations.md and
+    // pinned nowhere until now. Every other isolation test here sets
+    // `app.account_id` to some tenant and checks the other tenant's rows are
+    // hidden; none of them covers the case where the setting is absent —
+    // a connection that never went through `withTenant`, which is what a future
+    // caller reaching for the pool directly would produce.
+    //
+    // The policies compare against `current_setting('app.account_id', true)`,
+    // which is null when unset. If any policy were written so that null meant
+    // "unrestricted" rather than "match nothing", that connection would see
+    // every tenant at once. Zero rows on all five tables is the assertion that
+    // the default is deny (Spec-018).
+    const raw = new Client({ connectionString: appUrl });
+    await raw.connect();
+    try {
+      const count = async (sql: string) => (await raw.query<{ count: string }>(sql)).rows[0]!.count;
+
+      expect({
+        setting: (
+          await raw.query<{ value: string | null }>(
+            `select current_setting('app.account_id', true) as value`,
+          )
+        ).rows[0]!.value,
+        comments: await count(`select count(*)::text as count from comments`),
+        posts: await count(`select count(*)::text as count from posts`),
+        socialAccounts: await count(`select count(*)::text as count from social_accounts`),
+        replyOperations: await count(`select count(*)::text as count from reply_operations`),
+        accounts: await count(`select count(*)::text as count from accounts`),
+      }).toEqual({
+        setting: null,
+        comments: '0',
+        posts: '0',
+        socialAccounts: '0',
+        replyOperations: '0',
+        accounts: '0',
+      });
+    } finally {
+      await raw.end();
+    }
+  });
+
   it('shows a tenant exactly one account row: its own', async () => {
     // Nothing queries accounts today, which is why the policy is worth having.
     // The next query is written by someone who assumes the perimeter is whole.

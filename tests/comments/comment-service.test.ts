@@ -5,8 +5,10 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   CommentService,
   developmentFingerprintSecret,
+  REPLY_LEASE_MS,
   requestFingerprint,
 } from '../../src/comments/comment-service.js';
+import { DATABASE_CALL_BUDGET_MS } from '../../src/repositories/database.js';
 import {
   AdaptiveProviderAdapter,
   type ProviderClient,
@@ -20,12 +22,19 @@ import {
 } from '../../src/repositories/in-memory.js';
 import {
   ProviderCursorRejectedError,
+  ProviderError,
   ProviderRateLimitError,
   ProviderUnavailableError,
   ServiceError,
 } from '../../src/shared/errors.js';
+import { REQUEST_TIMEOUT_MS } from '../../src/index.js';
 import type { ProviderCapability } from '../../src/comments/contracts.js';
-import { noopMetrics, providerPolicies, type RetryPolicy } from '../../src/shared/observability.js';
+import {
+  noopMetrics,
+  providerPolicies,
+  providerRetryPolicy,
+  type RetryPolicy,
+} from '../../src/shared/observability.js';
 import {
   externalComment,
   observedComment,
@@ -65,6 +74,14 @@ interface Harness {
   client?: ProviderClient;
   maxPageSize?: number;
   capabilities?: readonly ProviderCapability[];
+  /**
+   * Overrides `immediatePolicy`, whose `maxAttempts: 1` means no service-level
+   * test could observe retry behaviour at all — `retryDelayFor` returns null on
+   * the first attempt whatever the error. Every retry assertion in this file
+   * therefore lived at the policy level, and the reply path's retry behaviour
+   * was untested through the service by construction (Spec-026).
+   */
+  retryPolicy?: RetryPolicy;
 }
 
 function buildService(options: Harness = {}) {
@@ -89,7 +106,7 @@ function buildService(options: Harness = {}) {
     post.platform,
     client,
     new Set(options.capabilities ?? ['list_comments', 'reply_to_comment']),
-    providerPolicies(immediatePolicy),
+    providerPolicies(options.retryPolicy ?? immediatePolicy),
   );
   const comments = new InMemoryCommentRepository([], tenant.accountId);
   const operations = new InMemoryReplyOperationRepository();
@@ -359,7 +376,7 @@ describe('replying to a comment', () => {
     ).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT', statusCode: 409 });
   });
 
-  it('records the taxonomy code when the provider rate limits the reply', async () => {
+  it('records a rate-limited reply as unknown, because a 429 proves nothing', async () => {
     const { service, operations, parentId } = await withCachedComments({
       client: {
         listComments: async () => ({
@@ -377,13 +394,69 @@ describe('replying to a comment', () => {
       service.replyToComment(tenant, parentId, 'Thank you!', 'key-1'),
     ).rejects.toBeInstanceOf(ProviderRateLimitError);
 
+    // Was `failed`. A 429 raised by a platform limiter, a CDN, or a gateway
+    // refusing on its own retry budget can arrive *after* the origin accepted
+    // and published the reply, and the status code does not say which happened.
+    // `failed` makes the next request answer `idempotency_key_failed`, which
+    // tells the client to retry with a new key — publishing a second reply
+    // under the customer's name. `unknown` is wrong only in the cheap
+    // direction (ADR-0015, Spec-026).
     await expect(operations.findByIdempotencyKey(tenant, 'key-1')).resolves.toMatchObject({
-      status: 'failed',
+      status: 'unknown',
       failureCode: 'PROVIDER_RATE_LIMITED',
     });
   });
 
-  it('treats a failed key as terminal so an ambiguous publish is never repeated', async () => {
+  it('dispatches a rate-limited publish exactly once, end to end', async () => {
+    // The policy-level test pins `retryDelayFor`; this pins the thing that
+    // actually matters — how many times a reply reaches the provider through
+    // the whole service path. Three publishes for one idempotency key, each a
+    // visible reply under the customer's name, with `recordPublished` storing
+    // only the last externalId so the first two were orphaned with no record
+    // anywhere (Spec-026).
+    //
+    // Two details are load-bearing, and both are how the original suite
+    // reported this path safe while it replayed.
+    //
+    // The policy must be able to retry. `immediatePolicy` sets `maxAttempts: 1`,
+    // so `retryDelayFor` returns null on the first attempt for every error and
+    // no service-level test could observe a replay at all.
+    //
+    // The Retry-After must fit the budget. Every reply rate-limit test in this
+    // file used 30_000, which exceeds `maxDelayMs` and is surfaced rather than
+    // slept off — publish count 1 whether the defect is present or not. A
+    // missing header falls to exponential backoff, which is the branch that
+    // replayed, and is what Meta and X routinely send.
+    let publishes = 0;
+    const { service, parentId } = await withCachedComments({
+      retryPolicy: {
+        maxAttempts: 3,
+        baseDelayMs: 1,
+        maxDelayMs: 5,
+        timeoutMs: 1_000,
+        shouldRetry: () => true,
+      },
+      client: {
+        listComments: async () => ({
+          items: [externalComment('ig-comment-1', '2026-08-01T10:00:00.000Z')],
+          nextCursor: null,
+          hasMore: false,
+        }),
+        replyToComment: async () => {
+          publishes += 1;
+          throw new ProviderRateLimitError('Too many requests.', null);
+        },
+      },
+    });
+
+    await expect(
+      service.replyToComment(tenant, parentId, 'Thank you!', 'key-1'),
+    ).rejects.toBeInstanceOf(ProviderRateLimitError);
+
+    expect(publishes).toBe(1);
+  });
+
+  it('treats a rate-limited key as terminal so an ambiguous publish is never repeated', async () => {
     const { service, parentId } = await withCachedComments({
       client: {
         listComments: async () => ({
@@ -398,9 +471,13 @@ describe('replying to a comment', () => {
     });
     await expect(service.replyToComment(tenant, parentId, 'Thank you!', 'key-1')).rejects.toThrow();
 
+    // The retry is still refused, and now with the code that tells the client
+    // not to reissue under a new key. Previously this was IDEMPOTENCY_CONFLICT
+    // with reason `idempotency_key_failed`, which asks for exactly the reissue
+    // that publishes a second reply (ADR-0015).
     await expect(
       service.replyToComment(tenant, parentId, 'Thank you!', 'key-1'),
-    ).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT', statusCode: 409 });
+    ).rejects.toMatchObject({ code: 'REPLY_OUTCOME_UNKNOWN', statusCode: 409 });
   });
 
   it('does not record a published reply as failed when storing it breaks', async () => {
@@ -410,7 +487,7 @@ describe('replying to a comment', () => {
     // later request can resolve it, and pending would mean waiting forever
     // (Spec-015).
     const { service, operations, comments, parentId } = await withCachedComments();
-    comments.upsertMany = async () => {
+    comments.storePublishedReply = async () => {
       throw new Error('database unavailable');
     };
 
@@ -425,7 +502,7 @@ describe('replying to a comment', () => {
     // An operator has to be able to find the reply that exists at the provider
     // and nowhere else. The provider's own identifier is the only handle.
     const { service, comments, logger, parentId } = await withCachedComments();
-    comments.upsertMany = async () => {
+    comments.storePublishedReply = async () => {
       throw new Error('database unavailable');
     };
 
@@ -440,7 +517,7 @@ describe('replying to a comment', () => {
     // IDEMPOTENCY_CONFLICT invites a retry with a new key. Here a retry may
     // publish a second reply under a customer's name, so the code differs.
     const { service, comments, parentId } = await withCachedComments();
-    comments.upsertMany = async () => {
+    comments.storePublishedReply = async () => {
       throw new Error('database unavailable');
     };
     await expect(service.replyToComment(tenant, parentId, 'Thank you!', 'key-1')).rejects.toThrow();
@@ -471,6 +548,34 @@ describe('replying to a comment', () => {
     await expect(operations.findByIdempotencyKey(tenant, 'key-1')).resolves.toMatchObject({
       status: 'unknown',
       failureCode: 'PROVIDER_UNAVAILABLE',
+    });
+  });
+
+  it('records an upstream error after send as unknown rather than failed', async () => {
+    // The two cases above pin only the codes the source comment names, so
+    // `provesRejection` could be widened to `code !== 'PROVIDER_UNAVAILABLE'`
+    // and the suite stayed green. Under that reading an upstream 502 records
+    // `failed`, which tells the client to retry with a new key — and that is
+    // how a second reply gets published under a customer's name. A refusal is
+    // the narrow case; everything else is silence (Spec-020).
+    const { service, operations, parentId } = await withCachedComments({
+      client: {
+        listComments: async () => ({
+          items: [externalComment('ig-comment-1', '2026-08-01T10:00:00.000Z')],
+          nextCursor: null,
+          hasMore: false,
+        }),
+        replyToComment: async () => {
+          throw new ProviderError('The upstream platform returned 502.');
+        },
+      },
+    });
+
+    await expect(service.replyToComment(tenant, parentId, 'Thank you!', 'key-1')).rejects.toThrow();
+
+    await expect(operations.findByIdempotencyKey(tenant, 'key-1')).resolves.toMatchObject({
+      status: 'unknown',
+      failureCode: 'PROVIDER_ERROR',
     });
   });
 
@@ -513,9 +618,21 @@ describe('replying to a comment', () => {
     const operation = await operations.findByIdempotencyKey(tenant, 'key-1');
     const leaseMs = Date.parse(operation!.leaseExpiresAt) - Date.parse(operation!.createdAt);
 
-    // Must outlast the 30s HTTP request timeout, or a lease can expire while
-    // the request holding it is still running and a takeover races it.
-    expect(leaseMs).toBeGreaterThan(30_000);
+    // Must outlast the HTTP request timeout, or a lease can expire while the
+    // request holding it is still running and a takeover races it. Asserted
+    // against the configured value rather than a copy of it: as two separately
+    // pinned numbers, raising the request timeout past the lease would have
+    // broken the invariant with nothing to notice (Spec-020).
+    expect(leaseMs).toBeGreaterThan(REQUEST_TIMEOUT_MS);
+
+    // The request timeout is the weaker of the two bounds, and on its own the
+    // wrong one: Fastify destroys the socket without stopping the handler, so
+    // the work can outlive it. What the lease actually has to outlast is the
+    // work after the claim — one provider publish plus the three database
+    // calls that follow it (Spec-033).
+    const postClaimWorstCaseMs = providerRetryPolicy.timeoutMs + 3 * DATABASE_CALL_BUDGET_MS;
+    expect(leaseMs).toBeGreaterThan(postClaimWorstCaseMs);
+    expect(REPLY_LEASE_MS).toBeGreaterThan(postClaimWorstCaseMs);
     expect(Date.parse(operation!.leaseExpiresAt)).toBeGreaterThan(Date.now());
   });
 
@@ -619,6 +736,90 @@ describe('replying to a comment', () => {
     await expect(
       service.replyToComment(tenant, reply.id, 'And one more thing', 'key-2'),
     ).rejects.toMatchObject({ code: 'REPLY_DEPTH_EXCEEDED', statusCode: 422 });
+  });
+
+  it('refuses to reply to a comment whose parent has not been synced yet', async () => {
+    // The case the depth gate could not see. The provider says this comment
+    // answers `ig-comment-1`, which no stored row holds, so the LEFT JOIN
+    // resolves to null — the same null a genuine top-level comment produces.
+    // The gate read that as "no parent" and permitted the reply, publishing the
+    // two-level thread ADR-0014 exists to refuse.
+    //
+    // Newest-first is what makes this the common case rather than a rare one:
+    // a reply is newer than its parent, so it arrives in an earlier provider
+    // page, and against the 20-call hydration bound the parent may not arrive
+    // during this run at all (ADR-0016).
+    const orphanReply = {
+      ...observedComment('ig-comment-2', '2026-08-01T11:00:00.000Z'),
+      externalParentCommentId: 'ig-comment-1',
+    };
+    const { service, comments } = buildService();
+    const [stored] = await comments.upsertMany(tenant, [orphanReply]);
+
+    expect(stored!.parentCommentId).toBeNull();
+    expect(stored!.parentUnresolved).toBe(true);
+
+    await expect(
+      service.replyToComment(tenant, stored!.id, 'Thank you!', 'key-1'),
+    ).rejects.toMatchObject({ code: 'REPLY_DEPTH_EXCEEDED', statusCode: 422 });
+  });
+
+  it('still allows a reply to a genuinely top-level comment', async () => {
+    // The other side of the same gate: `parentUnresolved` must be false when
+    // the provider named no parent, or the third state closes the reply path
+    // for every comment rather than for the ones that are already replies.
+    const { service, comments } = buildService();
+    const [stored] = await comments.upsertMany(tenant, [
+      observedComment('ig-comment-1', '2026-08-01T10:00:00.000Z'),
+    ]);
+
+    expect(stored!.parentUnresolved).toBe(false);
+    await expect(
+      service.replyToComment(tenant, stored!.id, 'Thank you!', 'key-1'),
+    ).resolves.toMatchObject({ parentCommentId: stored!.id });
+  });
+
+  it('never overwrites an existing comment body when storing a published reply', async () => {
+    // The reply path used to share hydration's upsert, whose conflict clause is
+    // `do update set body = excluded.body`. That is right for hydration, which
+    // is reconciling with the provider and should absorb an edit. It is wrong
+    // for publication: if the provider hands back an identifier that already
+    // names a different stored comment, the reply's text is written over a
+    // customer's own comment — content this service does not own and cannot
+    // recover (Spec-027).
+    const { comments } = buildService();
+    const [victim] = await comments.upsertMany(tenant, [
+      observedComment('ig-comment-1', '2026-08-01T10:00:00.000Z'),
+    ]);
+    const originalBody = victim!.body;
+
+    await expect(
+      comments.storePublishedReply(tenant, {
+        ...observedComment('ig-comment-1', '2026-08-01T12:00:00.000Z'),
+        body: 'Thanks for reaching out! — from the brand',
+      }),
+    ).rejects.toMatchObject({ code: 'INTERNAL_ERROR', reason: 'reply_not_stored' });
+
+    // The refusal is the point: the customer's comment is untouched.
+    await expect(comments.findById(tenant, victim!.id)).resolves.toMatchObject({
+      body: originalBody,
+    });
+  });
+
+  it('stays idempotent when the same published reply is stored twice', async () => {
+    // The recovery path can run this twice for one publication, so an existing
+    // row holding the identical reply must return rather than raise.
+    const { comments } = buildService();
+    const reply = {
+      ...observedComment('ig-reply-1', '2026-08-01T12:00:00.000Z'),
+      body: 'Thank you!',
+    };
+
+    const first = await comments.storePublishedReply(tenant, reply);
+    const second = await comments.storePublishedReply(tenant, reply);
+
+    expect(second.id).toBe(first.id);
+    expect(second.body).toBe('Thank you!');
   });
 
   it('does not consume the idempotency key when it refuses on depth', async () => {
@@ -874,6 +1075,68 @@ describe('provider load under concurrency', () => {
 
     expect(concurrent).toBe(alone.client.listCalls);
     for (const page of pages) expect(page.items).toHaveLength(3);
+  });
+
+  it('does not fail a joining caller when the originator hydration fails', async () => {
+    // Single-flight is a load optimisation, and it used to turn one upstream
+    // failure into a fan-out of them: the joined promise was raced with no
+    // catch, so a provider error reached every reader waiting on it. K readers
+    // arriving together on a cold post all got 503, each while holding a
+    // snapshot it could have been served from.
+    //
+    // The suite covered the provider failing, but only for a caller running
+    // alone — never with a joiner attached, which is the case that multiplies
+    // it (Spec-029).
+    let calls = 0;
+    const failing: ProviderClient = {
+      listComments: async () => {
+        calls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        throw new ProviderUnavailableError('temporarily down');
+      },
+      replyToComment: async () => {
+        throw new Error('not used');
+      },
+    };
+    const logger = new RecordingLogger();
+    const service = new CommentService(
+      new InMemoryCommentRepository([], tenant.accountId),
+      new InMemoryPostRepository([post]),
+      new InMemoryReplyOperationRepository(),
+      new InMemoryPlatformProviderRegistry(
+        new Map([
+          [
+            post.platform,
+            new AdaptiveProviderAdapter(
+              post.platform,
+              failing,
+              new Set(['list_comments', 'reply_to_comment']),
+              providerPolicies(immediatePolicy),
+            ),
+          ],
+        ]),
+      ),
+      noopMetrics,
+      logger,
+    );
+
+    const outcomes = await Promise.allSettled(
+      Array.from({ length: 4 }, () => service.listComments(tenant, post.id, { limit: 25 })),
+    );
+
+    // One caller made the failing call and still surfaces the failure; the
+    // three that merely waited on it are served from their own snapshot.
+    expect(calls).toBe(1);
+    const rejected = outcomes.filter((outcome) => outcome.status === 'rejected');
+    const fulfilled = outcomes.filter((outcome) => outcome.status === 'fulfilled');
+    expect(rejected).toHaveLength(1);
+    expect(fulfilled).toHaveLength(3);
+    // An empty page rather than an error — and honest about being incomplete.
+    for (const outcome of fulfilled) {
+      if (outcome.status !== 'fulfilled') continue;
+      expect(outcome.value.items).toEqual([]);
+    }
+    expect(logger.events()).toContain('comments.list.hydration_join_failed');
   });
 
   it('gives a joining caller the same answer it would have had alone', async () => {
@@ -1323,6 +1586,19 @@ describe('idempotency fingerprint', () => {
     );
   });
 
+  it('still computes the exact digest already persisted in reply_operations', () => {
+    // Every other test here compares the function against itself, so switching
+    // SHA-256 for SHA-512 passed all of them. The digest is durable state — it
+    // sits in reply_operations.request_fingerprint — so changing the algorithm
+    // invalidates every in-flight idempotency key across a rolling deploy: the
+    // stored digest stops matching the recomputed one and a caller retrying a
+    // key gets a fingerprint mismatch instead of their original answer. This is
+    // the one value that has to be pinned from outside the function (Spec-020).
+    expect(requestFingerprint('comment-1', 'Thanks!', 'the-real-secret')).toBe(
+      '97d480c33d721e46d62f5c6ecc0445109feb2997d0b09532b03ef83c4efd4ee9',
+    );
+  });
+
   it('distinguishes the comment, the body, and the secret', () => {
     const base = requestFingerprint('comment-1', 'Thanks!', 'k');
 
@@ -1524,28 +1800,31 @@ describe('service error contract', () => {
     });
     await collect(() => service.replyToComment(tenant, parentId, 'Thank you!', 'key-flight'));
 
-    const failing = buildService({
-      client: {
-        listComments: async () => ({
-          items: [externalComment('ig-comment-1', '2026-08-01T10:00:00.000Z')],
-          nextCursor: null,
-          hasMore: false,
-        }),
-        replyToComment: async () => {
-          throw new ProviderRateLimitError('Too many requests.', 30_000);
-        },
-      },
+    // `failed` is no longer reachable through the provider: nothing observable
+    // on the reply path proves the provider refused, so `provesRejection`
+    // answers false for everything and the service writes `unknown` instead
+    // (ADR-0015). The status and this reason stay in the model because rows
+    // written by earlier versions still carry them, and a client meeting one
+    // must still get an answer it can act on — so the row is seeded directly,
+    // the way a pre-upgrade row would already exist in the table.
+    await operations.claim(tenant, {
+      id: crypto.randomUUID(),
+      commentId: parentId,
+      idempotencyKey: 'key-failed',
+      requestFingerprint: requestFingerprint(parentId, 'Thank you!', developmentFingerprintSecret),
+      status: 'pending',
+      resultingCommentId: null,
+      failureCode: null,
+      leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      externalReplyId: null,
+      createdAt: new Date().toISOString(),
+      completedAt: null,
     });
-    const failingParent = (await failing.service.listComments(tenant, post.id, { limit: 25 }))
-      .items[0]!.id;
-    await failing.service
-      .replyToComment(tenant, failingParent, 'Thank you!', 'key-failed')
-      .catch(() => undefined);
-    await collect(() =>
-      failing.service.replyToComment(tenant, failingParent, 'Thank you!', 'key-failed'),
-    );
+    const seeded = (await operations.findByIdempotencyKey(tenant, 'key-failed'))!;
+    await operations.fail(tenant, seeded.id, 'PROVIDER_RATE_LIMITED');
+    await collect(() => service.replyToComment(tenant, parentId, 'Thank you!', 'key-failed'));
 
-    comments.upsertMany = async () => {
+    comments.storePublishedReply = async () => {
       throw new Error('database unavailable');
     };
     await service

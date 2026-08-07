@@ -142,6 +142,35 @@ export class InMemoryCommentRepository implements CommentRepository {
     return stored.map((item) => this.toComment(context.accountId, item));
   }
 
+  public async storePublishedReply(
+    context: TenantContext,
+    reply: ObservedComment,
+  ): Promise<Comment> {
+    // Mirrors the SQL adapter's `on conflict do nothing`: publication creates a
+    // row, so an existing identifier is never an edit to absorb. Sharing
+    // hydration's overwrite here wrote the reply's text over a customer's own
+    // comment (Spec-027).
+    const existingId = this.byExternalId.get(context.accountId, reply.externalId);
+    if (existingId !== undefined) {
+      const existing = this.byId.get(context.accountId, existingId);
+      if (existing && existing.observed.body === reply.body) {
+        // The same reply, stored twice — the recovery path doing its job.
+        return this.toComment(context.accountId, existing);
+      }
+      // Shares `reply_not_stored` with the service's own guard: the client's
+      // situation and the action it should take are identical, and the reason
+      // vocabulary is a contract that should not grow a member per internal
+      // cause (Spec-017). The cause is distinguished in the log record.
+      throw new ServiceError(
+        'INTERNAL_ERROR',
+        'reply_not_stored',
+        'The published reply could not be stored.',
+        500,
+      );
+    }
+    return this.toComment(context.accountId, this.store(context.accountId, reply));
+  }
+
   /** Assigns an identity, or reuses the one this provider comment already has. */
   private store(accountId: string, observed: ObservedComment): StoredComment {
     const id = this.byExternalId.get(accountId, observed.externalId) ?? crypto.randomUUID();
@@ -167,6 +196,12 @@ export class InMemoryCommentRepository implements CommentRepository {
       // computed from it (ADR-0013).
       parentCommentId:
         parentExternal === null ? null : (this.byExternalId.get(accountId, parentExternal) ?? null),
+      // Mirrors the PostgreSQL adapter's LEFT JOIN miss: the provider named a
+      // parent and no stored row holds it. The adapters must agree here, or the
+      // reply-depth gate behaves differently in the demo composition than in
+      // the one that ships (ADR-0016).
+      parentUnresolved:
+        parentExternal !== null && this.byExternalId.get(accountId, parentExternal) === undefined,
       publishedAt: observed.publishedAt,
       updatedAt: observed.updatedAt,
     });
@@ -261,7 +296,9 @@ export class InMemoryReplyOperationRepository implements ReplyOperationRepositor
     operationId: string,
     externalReplyId: string,
   ): Promise<ReplyOperation> {
-    return this.update(context, operationId, { externalReplyId });
+    // Recording where the reply landed is not a state transition — it annotates
+    // an operation that is still in flight, so only `pending` accepts it.
+    return this.update(context, operationId, { externalReplyId }, ['pending']);
   }
 
   /** Only a pending operation moves, mirroring the SQL predicate. */
@@ -272,49 +309,72 @@ export class InMemoryReplyOperationRepository implements ReplyOperationRepositor
   ): Promise<ReplyOperation | null> {
     const operation = this.operations.get(context.accountId, operationId);
     if (operation?.status !== 'pending') return null;
-    return this.update(context, operationId, {
-      status: 'unknown',
-      failureCode,
-      completedAt: new Date().toISOString(),
-    });
+    return this.update(
+      context,
+      operationId,
+      {
+        status: 'unknown',
+        failureCode,
+        completedAt: new Date().toISOString(),
+      },
+      ['pending'],
+    );
   }
 
+  /**
+   * Resolves an operation to the reply it published. Accepts `unknown` as well
+   * as `pending`, because reconciling an unknown operation to its stored reply
+   * is the self-healing path; refuses a terminal outcome, so a late writer
+   * cannot erase what a client was already told. `failureCode` is preserved
+   * for the same reason (Spec-028).
+   */
   public async complete(
     context: TenantContext,
     operationId: string,
     commentId: string,
   ): Promise<ReplyOperation> {
-    return this.update(context, operationId, {
-      status: 'completed',
-      resultingCommentId: commentId,
-      failureCode: null,
-      completedAt: new Date().toISOString(),
-    });
+    return this.update(
+      context,
+      operationId,
+      {
+        status: 'completed',
+        resultingCommentId: commentId,
+        completedAt: new Date().toISOString(),
+      },
+      ['pending', 'unknown'],
+    );
   }
 
+  /** Only a pending operation may be failed — see the SQL adapter (ADR-0015). */
   public async fail(
     context: TenantContext,
     operationId: string,
     failureCode: string,
   ): Promise<ReplyOperation> {
-    return this.update(context, operationId, {
-      status: 'failed',
-      failureCode,
-      completedAt: new Date().toISOString(),
-    });
+    return this.update(
+      context,
+      operationId,
+      {
+        status: 'failed',
+        failureCode,
+        completedAt: new Date().toISOString(),
+      },
+      ['pending'],
+    );
   }
 
   private update(
     context: TenantContext,
     operationId: string,
     changes: Partial<ReplyOperation>,
+    fromStatuses: readonly ReplyOperation['status'][],
   ): ReplyOperation {
     const operation = this.operations.get(context.accountId, operationId);
-    if (!operation) {
+    if (!operation || !fromStatuses.includes(operation.status)) {
       throw new ServiceError(
         'INTERNAL_ERROR',
         'internal_error',
-        'Reply operation was not found.',
+        'Reply operation was not found in a state this transition accepts.',
         500,
       );
     }

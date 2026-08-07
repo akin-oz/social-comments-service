@@ -38,6 +38,7 @@ const comment: Comment = {
   },
   body: 'This is great!',
   parentCommentId: null,
+  parentUnresolved: false,
   publishedAt: '2026-08-01T10:00:00.000Z',
   updatedAt: '2026-08-01T10:00:00.000Z',
 };

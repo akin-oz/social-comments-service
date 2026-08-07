@@ -56,13 +56,29 @@ const DEFAULT_SNAPSHOT_LIFETIME_SECONDS = 300;
 /**
  * How long a claimed idempotency key stays claimed (Spec-015).
  *
- * Comfortably longer than any request that can still be alive — the HTTP
- * request timeout is 30 seconds and the provider call budget is shorter still —
- * so a lease can only expire after the request holding it has finished or died.
- * Too short and a takeover races a live request; too long and a crashed process
- * blocks its key for that long.
+ * This used to be justified by "the HTTP request timeout is 30 seconds, so
+ * nothing can outlive it." That bound does not hold: Fastify's `requestTimeout`
+ * destroys the socket, it does not stop the handler, which keeps running with
+ * nobody left to answer. A lease that expires while its holder is still working
+ * lets a second caller take the claim over and publish a duplicate reply, which
+ * is the one outcome the claim exists to prevent.
+ *
+ * The bound that does hold is the work after the claim:
+ *
+ *   - one provider publish, bounded by the write policy's `timeoutMs`. One,
+ *     not three — the write policy replays nothing at all (ADR-0015).
+ *   - `recordPublished`, `storePublishedReply`, and `complete`: three database
+ *     calls, each bounded by the pool's connection and query timeouts.
+ *
+ * The arithmetic is not done here, because it needs the provider policy and the
+ * pool's budget and this module must not reach into persistence to get them
+ * (ADR-0002). It is asserted in a test that may import both, so the relation
+ * fails loudly if any of the three numbers moves (Spec-033).
+ *
+ * Too long and a crashed process blocks its key for that long, so the margin is
+ * deliberate rather than generous.
  */
-const REPLY_LEASE_MS = 120_000;
+export const REPLY_LEASE_MS = 120_000;
 
 /**
  * How long a request will wait for a hydration someone else started
@@ -78,14 +94,34 @@ const HYDRATION_JOIN_WAIT_MS = 10_000;
 /**
  * Whether a provider failure proves the reply was never published.
  *
- * A rate limit is a refusal: the provider declined to process the request, so
- * nothing went out and the key can be cleanly failed. A timeout or an upstream
- * error proves only that no usable answer arrived, which is a different thing
- * and gets the different state. Treating silence as refusal is what invites a
- * duplicate publication under a customer's name.
+ * Nothing observable on the reply path proves that any more.
+ *
+ * A rate limit used to qualify, on the reading that the provider declined to
+ * process the request, so nothing went out and the key could be cleanly failed.
+ * That holds for a 429 raised by the write handler itself. It does not hold for
+ * a 429 raised by anything in front of it — a platform limiter, a CDN, a
+ * gateway refusing on its own retry budget — any of which can answer 429 after
+ * the origin already accepted and published the reply. The status code does not
+ * say which happened.
+ *
+ * The consequence of guessing wrong ran in one direction only: `fail` makes
+ * `replay` answer a retry with `idempotency_key_failed`, which tells the client
+ * *retry with a new key*, and if the reply did go out that publishes a second
+ * one under a customer's name. `unknown` tells the client not to retry, which
+ * is wrong only in the cheap direction — a reply that was genuinely refused
+ * needs an operator or a reconciliation pass rather than an automatic retry.
+ *
+ * So the list is empty, and is kept as a list rather than deleted into an
+ * unexplained `markUnknown` at the call site: a provider adapter that can
+ * genuinely prove a refusal — a 4xx raised by the write handler itself, with
+ * the platform's own error code attached — adds one entry here, and the
+ * reasoning it has to satisfy is written directly above it (ADR-0015,
+ * Spec-026).
  */
+const CODES_PROVING_REJECTION: readonly string[] = [];
+
 function provesRejection(code: string): boolean {
-  return code === 'PROVIDER_RATE_LIMITED';
+  return CODES_PROVING_REJECTION.includes(code);
 }
 
 function snapshotLifetimeMs(): number {
@@ -348,7 +384,15 @@ export class CommentService {
     // One level is a normalisation this service chose, not a platform rule
     // (ADR-0014): X and Facebook nest arbitrarily. The stored parent already
     // says whether it is itself a reply, so enforcing it costs no round trip.
-    if (comment.parentCommentId !== null) {
+    //
+    // `parentUnresolved` is the third answer. The provider said this comment
+    // answers something, and the service has not stored that something yet — so
+    // it *is* a reply, and replying to it would publish the two-level thread
+    // this rule exists to prevent. Reading the join's null as "no parent" let
+    // exactly that through, and systematically rather than rarely: newest-first
+    // providers deliver replies before their parents, so on any post large
+    // enough to paginate this was the common case, not the rare one (ADR-0016).
+    if (comment.parentCommentId !== null || comment.parentUnresolved) {
       this.metrics.increment('comments.reply.failure', {
         platform: comment.platform,
         code: 'REPLY_DEPTH_EXCEEDED',
@@ -460,7 +504,10 @@ export class CommentService {
     let stored;
     try {
       await this.operations.recordPublished(context, claim.operation.id, reply.externalId);
-      [stored] = await this.comments.upsertMany(context, [reply]);
+      // Not `upsertMany`: hydration's conflict clause overwrites `body`, which
+      // on an identifier collision replaced a customer's own comment with the
+      // reply text (Spec-027).
+      stored = await this.comments.storePublishedReply(context, reply);
       if (!stored) {
         throw new ServiceError(
           'INTERNAL_ERROR',
@@ -601,6 +648,15 @@ export class CommentService {
    * knowingly incomplete page, reported as such by `hasMore` — which is a
    * better outcome than holding a request until its own timeout, having helped
    * nobody.
+   *
+   * The originator's *failure* is treated the same way, and used not to be. The
+   * joined promise was raced with no `catch`, so a provider error reached every
+   * reader waiting on it: K readers arriving on a cold post all received 503,
+   * each while holding a perfectly serviceable snapshot they could have been
+   * served from. Single-flight is a load optimisation, and it had quietly turned
+   * one upstream failure into a fan-out of them. A joiner did not make the call
+   * that failed and has no more reason to fail than it does to wait forever
+   * (Spec-029).
    */
   private async joinHydration(
     context: RequestContext,
@@ -613,8 +669,31 @@ export class CommentService {
     const bounded = new Promise<PostSnapshotState>((resolve) => {
       timer = setTimeout(() => resolve(fallback), HYDRATION_JOIN_WAIT_MS);
     });
+    let joinFailed = false;
     try {
-      const state = await Promise.race([inFlight.then((outcome) => outcome.state), bounded]);
+      const state = await Promise.race([
+        inFlight.then(
+          (outcome) => outcome.state,
+          (error: unknown) => {
+            // The originator's failure ends this joiner's wait; it does not
+            // become this joiner's failure.
+            joinFailed = true;
+            this.metrics.increment('comments.list.hydration_join_failed', {
+              platform: post.platform,
+            });
+            this.logger.warn('comments.list.hydration_join_failed', {
+              ...this.trace(context),
+              postId: post.id,
+              platform: post.platform,
+              code: toFailureCode(error),
+              waitedMs: Date.now() - waitedFrom,
+            });
+            return fallback;
+          },
+        ),
+        bounded,
+      ]);
+      if (joinFailed) return state;
       this.metrics.increment('comments.list.hydration_joined', { platform: post.platform });
       this.metrics.observe('comments.list.hydration_wait_ms', Date.now() - waitedFrom, {
         platform: post.platform,
