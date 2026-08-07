@@ -1,0 +1,1264 @@
+{
+  "info": {
+    "_postman_id": "db6269e5-4e10-421f-a812-809e08979e32",
+    "name": "Blotato Comment Service — /v2",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Retrieve comments for a published post, and reply to a comment. Every request asserts an HTTP status and, on failure, the exact error.code + error.reason.\n\nSETUP\n1. Import this file into Postman.\n2. baseUrl defaults to the live demo. To hit a local instance, edit the collection variable to http://localhost:3000.\n3. Run \"List comments — tenant A\" first: it captures {{commentId}} and {{cursor}} that the Reply folder chains off.\n4. Or use the Collection Runner top-to-bottom — folders are ordered so state is populated before it is used.\n\nNOTE Reply requests publish through the deployment's configured provider and create data; that is expected and safe against the demo/fixture provider. Auth follows assumption A-001: the X-Account-Id header is the tenant context supplied by the platform gateway."
+  },
+  "item": [
+    {
+      "name": "1 · Liveness & docs",
+      "item": [
+        {
+          "name": "Health probe (public)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"no account context needed\", () => pm.expect(pm.response.code).to.eql(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "QA-01 — liveness only, touches no account and no database."
+          }
+        },
+        {
+          "name": "OpenAPI document",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json();",
+                  "pm.test(\"is OpenAPI 3.1\", () => pm.expect(d.openapi).to.match(/^3\\.1/));",
+                  "pm.test(\"declares the two /v2 paths\", () => { const k = Object.keys(d.paths); pm.expect(k).to.include(\"/v2/posts/{postId}/comments\"); pm.expect(k).to.include(\"/v2/comments/{commentId}/replies\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/openapi.json",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi.json"
+              ]
+            },
+            "description": "QA-03 — served only when ENABLE_API_DOCS is on (it is on the demo)."
+          }
+        },
+        {
+          "name": "Swagger UI",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/documentation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "documentation"
+              ]
+            },
+            "description": "QA-02 — human-facing docs page. Open in a browser for the interactive UI."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 · Retrieve comments",
+      "item": [
+        {
+          "name": "List comments — tenant A (RUN FIRST)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"shape is data/pagination/snapshot\", () => pm.expect(b).to.have.all.keys(\"data\",\"pagination\",\"snapshot\"));",
+                  "pm.test(\"pagination has hasMore + nextCursor\", () => pm.expect(b.pagination).to.have.all.keys(\"hasMore\",\"nextCursor\"));",
+                  "// Capture a top-level comment id so the reply requests can chain off it.",
+                  "const top = (b.data || []).find((c) => c.parentCommentId === null);",
+                  "if (top) { pm.collectionVariables.set(\"commentId\", top.id); console.log(\"captured commentId =\", top.id); }",
+                  "else { console.warn(\"no top-level comment found on this post\"); }",
+                  "if (b.pagination && b.pagination.nextCursor) pm.collectionVariables.set(\"cursor\", b.pagination.nextCursor);",
+                  "// Provider identifiers must never leak.",
+                  "pm.test(\"no provider comment/post id fields leak\", () => { const c = (b.data||[])[0]; if (c) pm.expect(c).to.have.all.keys(\"id\",\"postId\",\"platform\",\"author\",\"body\",\"parentCommentId\",\"publishedAt\",\"updatedAt\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/posts/{{postA}}/comments?limit=25",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "posts",
+                "{{postA}}",
+                "comments"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "25"
+                }
+              ]
+            },
+            "description": "QA-08/09/11 — happy path. Populates {{commentId}} and {{cursor}} for later requests. Run this before the Reply folder."
+          }
+        },
+        {
+          "name": "List comments — next page (uses {{cursor}})",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"cursor\")) console.warn(\"Run \\\"List comments — tenant A\\\" first, and only if hasMore was true.\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"returns a page\", () => pm.expect(pm.response.json().data).to.be.an(\"array\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/posts/{{postA}}/comments?limit=1&cursor={{cursor}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "posts",
+                "{{postA}}",
+                "comments"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "1"
+                },
+                {
+                  "key": "cursor",
+                  "value": "{{cursor}}"
+                }
+              ]
+            },
+            "description": "QA-12 — keyset pagination. Requires a captured {{cursor}}."
+          }
+        },
+        {
+          "name": "Cross-tenant read is 404 (A reads B's post)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 404\", () => pm.response.to.have.status(404));",
+                  "const e = pm.response.json().error;",
+                  "pm.test(\"code is POST_NOT_FOUND\", () => pm.expect(e.code).to.eql(\"POST_NOT_FOUND\"));",
+                  "pm.test(\"reason is post_not_found\", () => pm.expect(e.reason).to.eql(\"post_not_found\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/posts/{{postB}}/comments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "posts",
+                "{{postB}}",
+                "comments"
+              ]
+            },
+            "description": "QA-18 — the headline isolation guarantee: another tenant's post is 404, never 403."
+          }
+        },
+        {
+          "name": "Unknown post is 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 404\", () => pm.response.to.have.status(404));",
+                  "const e = pm.response.json().error;",
+                  "pm.test(\"code is POST_NOT_FOUND\", () => pm.expect(e.code).to.eql(\"POST_NOT_FOUND\"));",
+                  "pm.test(\"reason is post_not_found\", () => pm.expect(e.reason).to.eql(\"post_not_found\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/posts/11111111-1111-1111-1111-111111111111/comments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "posts",
+                "11111111-1111-1111-1111-111111111111",
+                "comments"
+              ]
+            },
+            "description": "QA-20 — not visible in scope, resolved as 404 rather than 500."
+          }
+        },
+        {
+          "name": "Fabricated cursor is 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", () => pm.response.to.have.status(400));",
+                  "const e = pm.response.json().error;",
+                  "pm.test(\"code is INVALID_CURSOR\", () => pm.expect(e.code).to.eql(\"INVALID_CURSOR\"));",
+                  "pm.test(\"reason is cursor_not_issued_by_service\", () => pm.expect(e.reason).to.eql(\"cursor_not_issued_by_service\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/posts/{{postA}}/comments?cursor=not-a-real-cursor",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "posts",
+                "{{postA}}",
+                "comments"
+              ],
+              "query": [
+                {
+                  "key": "cursor",
+                  "value": "not-a-real-cursor"
+                }
+              ]
+            },
+            "description": "QA-15 — action: restart pagination from no cursor."
+          }
+        },
+        {
+          "name": "limit out of range is 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", () => pm.response.to.have.status(400));",
+                  "const e = pm.response.json().error;",
+                  "pm.test(\"code is INVALID_REQUEST\", () => pm.expect(e.code).to.eql(\"INVALID_REQUEST\"));",
+                  "pm.test(\"reason is request_validation_failed\", () => pm.expect(e.reason).to.eql(\"request_validation_failed\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/posts/{{postA}}/comments?limit=101",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "posts",
+                "{{postA}}",
+                "comments"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "101"
+                }
+              ]
+            },
+            "description": "QA-38 — limit is an integer 1–100."
+          }
+        },
+        {
+          "name": "Unknown query param is ignored (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/posts/{{postA}}/comments?bogus=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "posts",
+                "{{postA}}",
+                "comments"
+              ],
+              "query": [
+                {
+                  "key": "bogus",
+                  "value": "1"
+                }
+              ]
+            },
+            "description": "QA-37 — VERIFIED against the live demo: an unknown query param is stripped and ignored, not rejected. Consistent with the /v2 compatibility policy."
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 · Authentication",
+      "item": [
+        {
+          "name": "Missing X-Account-Id is 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 401\", () => pm.response.to.have.status(401));",
+                  "const e = pm.response.json().error;",
+                  "pm.test(\"code is UNAUTHENTICATED\", () => pm.expect(e.code).to.eql(\"UNAUTHENTICATED\"));",
+                  "pm.test(\"reason is missing_account_context\", () => pm.expect(e.reason).to.eql(\"missing_account_context\"));",
+                  "pm.test(\"service-generated requestId (client X-Request-Id ignored)\", () => pm.expect(pm.response.json().error.requestId).to.be.a(\"string\").and.not.eql(\"attacker-chosen\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v2/posts/{{postA}}/comments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "posts",
+                "{{postA}}",
+                "comments"
+              ]
+            },
+            "description": "QA-04 — no tenant context, request refused before any lookup."
+          }
+        },
+        {
+          "name": "Non-UUID X-Account-Id is 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 401\", () => pm.response.to.have.status(401));",
+                  "const e = pm.response.json().error;",
+                  "pm.test(\"code is UNAUTHENTICATED\", () => pm.expect(e.code).to.eql(\"UNAUTHENTICATED\"));",
+                  "pm.test(\"reason is missing_account_context\", () => pm.expect(e.reason).to.eql(\"missing_account_context\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "not-a-uuid"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/posts/{{postA}}/comments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "posts",
+                "{{postA}}",
+                "comments"
+              ]
+            },
+            "description": "QA-05 — the header must be a UUID."
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 · Reply (publishes data — run List first)",
+      "item": [
+        {
+          "name": "Reply to a top-level comment (201)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"commentId\")) console.warn(\"Run \\\"List comments — tenant A\\\" first to capture {{commentId}}.\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", () => pm.response.to.have.status(201));",
+                  "const d = pm.response.json().data;",
+                  "pm.test(\"parentCommentId matches the target\", () => pm.expect(d.parentCommentId).to.eql(pm.collectionVariables.get(\"commentId\")));",
+                  "pm.test(\"body is echoed\", () => pm.expect(d.body).to.eql(\"Thank you!\"));",
+                  "pm.test(\"id is a new service uuid\", () => pm.expect(d.id).to.match(/^[0-9a-f-]{36}$/));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "comments",
+                "{{commentId}}",
+                "replies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"body\":\"Thank you!\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "QA-22 — fresh Idempotency-Key each send via {{$guid}}."
+          }
+        },
+        {
+          "name": "Idempotent replay — first send",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"idemKeyReplay\", \"pm-replay-\" + pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set(\"replayId\", pm.response.json().data.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idemKeyReplay}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "comments",
+                "{{commentId}}",
+                "replies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"body\":\"Idempotent hello\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "QA-24a — sets a stable key and records the published reply id."
+          }
+        },
+        {
+          "name": "Idempotent replay — same key, same body (no duplicate)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", () => pm.response.to.have.status(201));",
+                  "pm.test(\"same id as first send — published once\", () => pm.expect(pm.response.json().data.id).to.eql(pm.collectionVariables.get(\"replayId\")));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idemKeyReplay}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "comments",
+                "{{commentId}}",
+                "replies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"body\":\"Idempotent hello\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "QA-24b — replays the stored reply rather than publishing a second one."
+          }
+        },
+        {
+          "name": "Key reuse with a different body is 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 409\", () => pm.response.to.have.status(409));",
+                  "const e = pm.response.json().error;",
+                  "pm.test(\"code is IDEMPOTENCY_CONFLICT\", () => pm.expect(e.code).to.eql(\"IDEMPOTENCY_CONFLICT\"));",
+                  "pm.test(\"reason is idempotency_key_body_mismatch\", () => pm.expect(e.reason).to.eql(\"idempotency_key_body_mismatch\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idemKeyReplay}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "comments",
+                "{{commentId}}",
+                "replies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"body\":\"DIFFERENT body, same key\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "QA-25 — reusing a key for a different body is a caller bug."
+          }
+        },
+        {
+          "name": "Missing Idempotency-Key is 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", () => pm.response.to.have.status(400));",
+                  "const e = pm.response.json().error;",
+                  "pm.test(\"code is INVALID_REQUEST\", () => pm.expect(e.code).to.eql(\"INVALID_REQUEST\"));",
+                  "pm.test(\"reason is idempotency_key_missing\", () => pm.expect(e.reason).to.eql(\"idempotency_key_missing\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "comments",
+                "{{commentId}}",
+                "replies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"body\":\"Thank you!\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "QA-26."
+          }
+        },
+        {
+          "name": "Reply to an unissued comment id is 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 404\", () => pm.response.to.have.status(404));",
+                  "const e = pm.response.json().error;",
+                  "pm.test(\"code is COMMENT_NOT_FOUND\", () => pm.expect(e.code).to.eql(\"COMMENT_NOT_FOUND\"));",
+                  "pm.test(\"reason is comment_not_found\", () => pm.expect(e.reason).to.eql(\"comment_not_found\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/comments/99999999-9999-9999-9999-999999999999/replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "comments",
+                "99999999-9999-9999-9999-999999999999",
+                "replies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"body\":\"Thank you!\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "QA-23 — list the post first, then reply to an id from it."
+          }
+        },
+        {
+          "name": "Empty body is 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", () => pm.response.to.have.status(400));",
+                  "const e = pm.response.json().error;",
+                  "pm.test(\"code is INVALID_REQUEST\", () => pm.expect(e.code).to.eql(\"INVALID_REQUEST\"));",
+                  "pm.test(\"reason is request_validation_failed\", () => pm.expect(e.reason).to.eql(\"request_validation_failed\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "comments",
+                "{{commentId}}",
+                "replies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"body\":\"\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "QA-28 — body has minLength 1."
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 · Transport & routing",
+      "item": [
+        {
+          "name": "Body over 10,000 chars is 400 (schema)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"longBody\", \"a\".repeat(10001));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", () => pm.response.to.have.status(400));",
+                  "const e = pm.response.json().error;",
+                  "pm.test(\"code is INVALID_REQUEST\", () => pm.expect(e.code).to.eql(\"INVALID_REQUEST\"));",
+                  "pm.test(\"reason is request_validation_failed\", () => pm.expect(e.reason).to.eql(\"request_validation_failed\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "comments",
+                "{{commentId}}",
+                "replies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"body\":\"{{longBody}}\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "QA-30 — maxLength 10000, caught by validation (distinct from the 64 KB transport limit)."
+          }
+        },
+        {
+          "name": "Body over 64 KB is 413 (transport)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"bigBody\", \"a\".repeat(70000));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 413\", () => pm.response.to.have.status(413));",
+                  "const e = pm.response.json().error;",
+                  "pm.test(\"code is INVALID_REQUEST\", () => pm.expect(e.code).to.eql(\"INVALID_REQUEST\"));",
+                  "pm.test(\"reason is request_body_too_large\", () => pm.expect(e.reason).to.eql(\"request_body_too_large\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "comments",
+                "{{commentId}}",
+                "replies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"body\":\"{{bigBody}}\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "QA-33 — the 64 KB body cap; rejected before parse, not a 500."
+          }
+        },
+        {
+          "name": "Unsupported content type is 415",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 415\", () => pm.response.to.have.status(415));",
+                  "const e = pm.response.json().error;",
+                  "pm.test(\"code is INVALID_REQUEST\", () => pm.expect(e.code).to.eql(\"INVALID_REQUEST\"));",
+                  "pm.test(\"reason is request_body_malformed\", () => pm.expect(e.reason).to.eql(\"request_body_malformed\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "text/plain"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "comments",
+                "{{commentId}}",
+                "replies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "hello",
+              "options": {
+                "raw": {
+                  "language": "text"
+                }
+              }
+            },
+            "description": "QA-34."
+          }
+        },
+        {
+          "name": "Malformed JSON is 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", () => pm.response.to.have.status(400));",
+                  "const e = pm.response.json().error;",
+                  "pm.test(\"code is INVALID_REQUEST\", () => pm.expect(e.code).to.eql(\"INVALID_REQUEST\"));",
+                  "pm.test(\"reason is request_body_malformed\", () => pm.expect(e.reason).to.eql(\"request_body_malformed\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "comments",
+                "{{commentId}}",
+                "replies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"body\":",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "QA-35."
+          }
+        },
+        {
+          "name": "Unknown route is 404 ROUTE_NOT_FOUND",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 404\", () => pm.response.to.have.status(404));",
+                  "const e = pm.response.json().error;",
+                  "pm.test(\"code is ROUTE_NOT_FOUND\", () => pm.expect(e.code).to.eql(\"ROUTE_NOT_FOUND\"));",
+                  "pm.test(\"reason is route_not_found\", () => pm.expect(e.reason).to.eql(\"route_not_found\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Account-Id",
+                "value": "{{accountA}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/nope",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "nope"
+              ]
+            },
+            "description": "QA-36 — no route matched, distinct from a scoped-resource 404."
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://comments.akinoztorun.dev",
+      "type": "string"
+    },
+    {
+      "key": "accountA",
+      "value": "2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b001",
+      "type": "string"
+    },
+    {
+      "key": "postA",
+      "value": "2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b002",
+      "type": "string"
+    },
+    {
+      "key": "accountB",
+      "value": "7c3d9e10-4a5b-4c6d-8e9f-01a2b3c4d005",
+      "type": "string"
+    },
+    {
+      "key": "postB",
+      "value": "7c3d9e10-4a5b-4c6d-8e9f-01a2b3c4d006",
+      "type": "string"
+    },
+    {
+      "key": "accountC",
+      "value": "f0a4c2d8-6b3e-4f21-8a7c-3d5e9b1c2007",
+      "type": "string"
+    },
+    {
+      "key": "postC",
+      "value": "f0a4c2d8-6b3e-4f21-8a7c-3d5e9b1c2008",
+      "type": "string"
+    },
+    {
+      "key": "commentId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "cursor",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "idemKeyReplay",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "replayId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "longBody",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "bigBody",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}
