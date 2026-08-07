@@ -1,4 +1,4 @@
-import { ProviderError } from '../shared/errors.js';
+import { ProviderError, ServiceError } from '../shared/errors.js';
 import { validateObservedComment } from '../shared/validation.js';
 import {
   callProvider,
@@ -69,6 +69,7 @@ export class AdaptiveProviderAdapter implements AdaptiveProvider {
   ) {}
 
   public async listComments(query: ProviderListCommentsQuery): Promise<ProviderCommentPage> {
+    this.supports('list_comments');
     const connection = this.authorised(query.connection);
     const page = await callProvider(
       () =>
@@ -94,6 +95,7 @@ export class AdaptiveProviderAdapter implements AdaptiveProvider {
   }
 
   public async replyToComment(command: ProviderReplyCommand): Promise<ObservedComment> {
+    this.supports('reply_to_comment');
     const connection = this.authorised(command.connection);
     const item = await callProvider(
       () =>
@@ -109,6 +111,31 @@ export class AdaptiveProviderAdapter implements AdaptiveProvider {
       (error, delayMs) => this.logRetry('reply_to_comment', error, delayMs),
     );
     return this.toObserved(item, command.post, command.parentExternalCommentId);
+  }
+
+  /**
+   * Refuses an operation this adapter does not declare.
+   *
+   * `capabilities` is public and the service checks it through
+   * `requireCapability` before calling — but nothing checked it *here*, so the
+   * declaration was enforced only by every caller remembering to. Both current
+   * call sites are correct; a third one, or a background sync reaching the
+   * adapter directly, would silently call a client that does not implement the
+   * operation. A declaration the declaring object does not enforce is
+   * documentation (Spec-030).
+   *
+   * The call-site check stays: it fails before a claim is taken and without
+   * touching the network, which is a better failure than this one.
+   */
+  private supports(capability: ProviderCapability): void {
+    if (!this.capabilities.has(capability)) {
+      throw new ServiceError(
+        'UNSUPPORTED_CAPABILITY',
+        'capability_unsupported',
+        `Provider ${this.platform} does not support ${capability}.`,
+        422,
+      );
+    }
   }
 
   /**

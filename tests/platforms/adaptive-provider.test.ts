@@ -4,7 +4,7 @@ import { AdaptiveProviderAdapter } from '../../src/platforms/adaptive-provider.j
 import { FixtureProviderClient } from '../../src/platforms/fixture-provider.js';
 import { ProviderError, ProviderUnavailableError } from '../../src/shared/errors.js';
 import { providerPolicies, providerRetryPolicy } from '../../src/shared/observability.js';
-import { connection, externalComment, post } from '../support/fixtures.js';
+import { connection, externalComment, post, RecordingLogger } from '../support/fixtures.js';
 
 function adapter(client: ConstructorParameters<typeof AdaptiveProviderAdapter>[1]) {
   return new AdaptiveProviderAdapter(
@@ -171,6 +171,46 @@ describe('adaptive provider adapter', () => {
       items: [],
     });
     expect(attempts).toBe(2);
+  });
+
+  it('records the retry it just performed', async () => {
+    // Every retry test above constructs the adapter without a logger, so the
+    // whole `onRetry` wiring could be deleted and the suite stayed green.
+    // `provider.call.retried` is documented as the earliest warning that a
+    // provider is degrading — retries are invisible to the application layer
+    // because they happen inside a single call, so if this record is not
+    // emitted the degradation is silent until it becomes an outage (Spec-020).
+    const logger = new RecordingLogger();
+    let attempts = 0;
+    const provider = new AdaptiveProviderAdapter(
+      'instagram',
+      {
+        listComments: async () => {
+          attempts += 1;
+          if (attempts === 1) throw new ProviderUnavailableError('temporarily down');
+          return { items: [], nextCursor: null, hasMore: false };
+        },
+        replyToComment: async () => {
+          throw new Error('not used');
+        },
+      },
+      new Set(['list_comments']),
+      providerPolicies({ ...providerRetryPolicy, timeoutMs: 500, baseDelayMs: 1, maxDelayMs: 2 }),
+      logger,
+    );
+
+    await provider.listComments({ post, connection, limit: 10 });
+
+    const retried = logger.find('provider.call.retried');
+    expect(retried).toBeDefined();
+    expect(retried?.level).toBe('warn');
+    expect(retried?.fields).toMatchObject({
+      platform: 'instagram',
+      operation: 'list_comments',
+      code: 'PROVIDER_UNAVAILABLE',
+    });
+    // The delay is what an operator reads to tell a backoff from a hot loop.
+    expect(retried?.fields.delayMs).toBeGreaterThan(0);
   });
 
   it('hands the client the authorised connection on both operations', async () => {
