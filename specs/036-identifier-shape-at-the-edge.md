@@ -50,7 +50,7 @@ adapter accept an identifier PostgreSQL cannot store — or that dropped the
 `isUuid` guard so a malformed id reached a `::uuid` cast — would ship green.
 
 The same asymmetry runs the other way at the edge. The account context's shape
-*is* validated there: the `onRequest` hook rejects a non-UUID `x-account-id`
+_is_ validated there: the `onRequest` hook rejects a non-UUID `x-account-id`
 with `401`. Only the two path identifiers are exempt, and only they can reach a
 repository unshaped.
 
@@ -60,7 +60,7 @@ repository unshaped.
   shape and why the `'post-1'` fixture is unrepresentative of any stored row.
 - Spec-025 established `assertStoredComment` / `assertStoredReplyOperation` as
   the single mapper chokepoint both adapters already funnel through, and the
-  rule that a malformed *stored* record is a service fault — a `500`
+  rule that a malformed _stored_ record is a service fault — a `500`
   `StoredRecordInvalidError` (`stored_record_invalid`), asserted at
   `tests/api/routes.test.ts:402` — never a client `400`. This spec extends that
   chokepoint; it does not add a second one.
@@ -86,13 +86,13 @@ repository unshaped.
 2. **Add validated constructors** `toPostId(value: string): PostId | null` and
    `toCommentId(value: string): CommentId | null` in
    `src/shared/identifiers.ts`, built on the existing `isUuid`. These are the
-   only *inbound* mint — the point at which a client-supplied string becomes a
+   only _inbound_ mint — the point at which a client-supplied string becomes a
    branded identifier.
 3. **Extend the Spec-025 chokepoint** in `src/shared/validation.ts`:
    `assertStoredComment` and `assertStoredReplyOperation` accept plain-string-id
-   input, assert `isUuid` shape on the identifier fields *in addition to* the
+   input, assert `isUuid` shape on the identifier fields _in addition to_ the
    existing non-empty rules, and return the branded `Comment` / `ReplyOperation`.
-   This is the only *outbound* mint. Because both adapters already call these
+   This is the only _outbound_ mint. Because both adapters already call these
    functions, it makes the in-memory adapter reject a non-UUID stored identifier
    exactly as the PostgreSQL `::uuid` column does.
 4. **Parse the two path params at the edge** in `src/api/routes.ts` via the new
@@ -127,7 +127,7 @@ repository unshaped.
 ### API
 
 A malformed `postId` / `commentId` is rejected at one place instead of three,
-but its *status* is the open decision. Keeping `404` preserves
+but its _status_ is the open decision. Keeping `404` preserves
 `postgres-composition.integration.test.ts:155` and the recorded intent; moving to
 `400` is a breaking status change on an existing, tested path. No new fields,
 routes, or reasons arise under either choice.

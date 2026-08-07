@@ -41,8 +41,8 @@ conflict target is `unique (social_account_id, external_comment_id)` (migration
 in-batch key is `externalId`. If a provider page repeats a comment — which a
 newest-first, paginating provider can do at a page boundary — two rows in the
 same statement carry the same conflict key, and PostgreSQL aborts the whole
-command with SQLSTATE `21000` (`cardinality_violation`): *"ON CONFLICT DO UPDATE
-command cannot affect row a second time."* The row-by-row loop never hits this,
+command with SQLSTATE `21000` (`cardinality_violation`): _"ON CONFLICT DO UPDATE
+command cannot affect row a second time."_ The row-by-row loop never hits this,
 because each repeated key is a separate statement that conflicts with the row
 the previous one just wrote. So the set-based form needs an explicit in-batch
 de-duplication step that the loop got for free.
@@ -53,7 +53,7 @@ de-duplication step that the loop got for free.
   overwrites the body (`do update set body = excluded.body, ...`) because
   hydration is reconciling with the provider and a conflict means the comment
   was edited (Spec-027, and the `'refreshes a comment the provider reports as
-  edited'` integration test). This is the opposite of the reply path's
+edited'` integration test). This is the opposite of the reply path's
   `storePublishedReply`, which inserts `on conflict ... do nothing` so a publish
   can never write over a customer's own comment. Spec-027 split these two on
   purpose; this spec must not re-merge them or change which one overwrites.
@@ -76,9 +76,9 @@ de-duplication step that the loop got for free.
   existing contract; today the SQL read-back already returns distinct rows while
   the in-memory adapter returns one per input, and this spec does not change
   either.
-- Keeping the *last* occurrence of a repeated `externalId` is the tie-break that
+- Keeping the _last_ occurrence of a repeated `externalId` is the tie-break that
   matches current behaviour on both adapters: the row-by-row `do update set body
-  = excluded.body` leaves the last write standing, and the in-memory `store`
+= excluded.body` leaves the last write standing, and the in-memory `store`
   reuses the assigned UUID and overwrites with the later observation. Keeping the
   first occurrence would diverge from both.
 
@@ -88,7 +88,7 @@ In scope, `src/repositories/postgres.ts`:
 
 1. Replace the per-item loop in `upsertMany` with a single multi-row
    `INSERT ... SELECT ... FROM posts ... ON CONFLICT (social_account_id,
-   external_comment_id) DO UPDATE SET ... RETURNING id`, resolving each row's
+external_comment_id) DO UPDATE SET ... RETURNING id`, resolving each row's
    `post_id`/`social_account_id` by joining the input rows to `posts` on
    `(post_id, account_id)` exactly as the single-row insert does today.
 2. De-duplicate the observations by `externalId` before building the insert,
@@ -182,7 +182,7 @@ preserve:
   afterwards. This proves the count-based `POST_NOT_FOUND` detection still
   rejects and rolls back.
 - `'returns every stored comment of a batch, matched by external id not
-  position'` — a three-item distinct batch, each represented once and matched by
+position'` — a three-item distinct batch, each represented once and matched by
   `externalId`. This proves the single insert stores the whole page.
 
 Add one test for the case the rewrite introduces: a page that repeats one
@@ -201,7 +201,7 @@ one row, turns red. This is exactly the failure the `tasks.md` note predicts and
 is why the de-duplication must precede the insert.
 
 **Second named mutation — the tie-break is load-bearing.** Change the
-de-duplication to keep the *first* occurrence instead of the last. The new
+de-duplication to keep the _first_ occurrence instead of the last. The new
 test's body assertion turns red, because the surviving row now holds the first
 body rather than the second. This pins keep-last as the rule that matches both
 the row-by-row `do update set body = excluded.body` and the in-memory

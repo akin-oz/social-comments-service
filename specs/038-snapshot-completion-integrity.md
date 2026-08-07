@@ -83,8 +83,8 @@ return page.hasMore
 end. The only cursor failure the code anticipates is the loud one — an exception
 mapped to `ProviderCursorRejectedError`. But the vendor guidance the stored cursor
 rests on documents only that cursors become invalid, not that invalidation is
-signalled: Facebook's pagination guide says *"Don't store cursors. Cursors can
-quickly become invalid if items are added or deleted"* (recorded in
+signalled: Facebook's pagination guide says _"Don't store cursors. Cursors can
+quickly become invalid if items are added or deleted"_ (recorded in
 `docs/provider-capability-matrix.md`), and says nothing that guarantees a stale
 cursor is refused rather than accepted and answered from a different position.
 
@@ -113,9 +113,9 @@ certified as if it did.
 - Spec-013 persists `provider_cursor`, `provider_exhausted`, and
   `provider_completed_at` on `posts`; `PostSnapshotState` carries their in-memory
   twins. `completedAt` surfaces to the client as `snapshot.syncedAt` (Spec-014).
-- Spec-014 made the stored continuation best-effort and handled a *rejected* cursor
+- Spec-014 made the stored continuation best-effort and handled a _rejected_ cursor
   by restarting once and relying on upsert dedup on `(social_account_id,
-  external_comment_id)`. It handled the loud failure only.
+external_comment_id)`. It handled the loud failure only.
 - Spec-021 made `hasMore: true` with `syncedAt: null` binding: a run served over an
   incomplete snapshot is partial, and the client restarts over the finished snapshot.
   This spec reuses that signal rather than adding a new one.
@@ -143,7 +143,7 @@ certified as if it did.
    `completedAt` may be set only for a run that read the stream from its start —
    because it began from `providerCursor: null`, or because a loud
    `ProviderCursorRejectedError` restarted it there. A run whose first provider read
-   used a stored cursor the provider *accepted* must not certify completion, because
+   used a stored cursor the provider _accepted_ must not certify completion, because
    acceptance does not prove the cursor was honoured.
 4. **Route an uncertifiable run through the existing `syncedAt: null` contract**
    (Spec-021), so the client-visible signal is one it already understands — partial,
@@ -163,7 +163,7 @@ certified as if it did.
 - The P2 items adjacent to this one — `partialRun` not being re-evaluated on a
   continuing walk, `completedAt` being stamped at fetch time rather than request time,
   and the unbounded wall-clock on `runHydration`. They are real and stay open; this
-  spec touches completion's *conditions*, not its timestamp or its clock.
+  spec touches completion's _conditions_, not its timestamp or its clock.
 - Reflecting edits, deletions, or moderation of comments already stored (A-006).
 
 ## Contract impact
@@ -177,7 +177,7 @@ meanings tighten:
   stamped over a snapshot a silent restart left a hole in (defect 2). After this spec
   a non-null `syncedAt` is emitted only for a run that read the stream from its start,
   so the completeness it asserts is one the service actually observed. The set of runs
-  that report a non-null `syncedAt` therefore *narrows*: a post hydrated across
+  that report a non-null `syncedAt` therefore _narrows_: a post hydrated across
   requests over a stored cursor reports `syncedAt: null` — partial, restart — until a
   run reads it from the start (which the stale lifetime forces if nothing else does).
   A client that already honours the Spec-021 restart rule needs no change; a client
@@ -215,7 +215,7 @@ declared `paths`. Which is chosen decides whether the path claim must grow.
 2. A provider that returns only already-stored rows with `hasMore: true` on every
    call terminates the request at the absolute ceiling and reports the run partial,
    rather than looping.
-3. A run whose first provider read resumes a stored cursor the provider *accepts*, and
+3. A run whose first provider read resumes a stored cursor the provider _accepts_, and
    which then sees `hasMore: false`, does not set `exhausted`/`completedAt` and returns
    `snapshot.syncedAt: null`.
 4. A run that read the stream from `providerCursor: null`, or was restarted there by a
@@ -225,7 +225,7 @@ declared `paths`. Which is chosen decides whether the path claim must grow.
    `nextCursor: null`, and a non-null `syncedAt` on its first run (the existing
    guarantee, unchanged).
 6. The existing loud-rejection restart test (`restarts the stream when the provider
-   rejects a stored cursor`) and the Spec-021 deep-walk tests pass unchanged.
+rejects a stored cursor`) and the Spec-021 deep-walk tests pass unchanged.
 7. In-memory and PostgreSQL compositions agree on all of the above; the integration
    test through `createPostgresApplication` covers criteria 1 and 3.
 8. `docs/api-design.md` and `docs/operations.md` record the narrowed `syncedAt`
@@ -244,7 +244,7 @@ declared `paths`. Which is chosen decides whether the path claim must grow.
 - **Termination test.** A provider that never advances, asserting the request ends at
   the ceiling.
 - **Regression tests.** The shallow-post completion test (`still reports a shallow post
-  complete on its first run`) and the loud-rejection restart test, both unchanged.
+complete on its first run`) and the loud-rejection restart test, both unchanged.
 - **Integration.** The two failing tests, repeated through `createPostgresApplication`
   against a real database.
 
@@ -302,8 +302,8 @@ Each must turn a test red; each survives today.
      safe but wasteful restart) and false negatives if the silent restart happens to
      land on the boundary. Detection without a provider signal is inherently heuristic;
      this is the cost.
-   Proposed: **A**. It needs no schema change, fits the declared paths, and reuses an
-   existing contract signal; B is the more accurate model and the more invasive one.
+     Proposed: **A**. It needs no schema change, fits the declared paths, and reuses an
+     existing contract signal; B is the more accurate model and the more invasive one.
 4. **Whether the two fixes ship together.** They are separable — 1 is liveness, 2 is
    honesty — but both benefit from reasoning about whether a run is covering new ground.
    Proposed: together, since the read-from-start rule (3A) needs no signal 1 does not

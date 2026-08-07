@@ -28,12 +28,8 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/health",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "health"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
             },
             "description": "QA-01 — liveness only, touches no account and no database."
           }
@@ -59,12 +55,8 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/openapi.json",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "openapi.json"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["openapi.json"]
             },
             "description": "QA-03 — served only when ENABLE_API_DOCS is on (it is on the demo)."
           }
@@ -76,9 +68,7 @@
               "listen": "test",
               "script": {
                 "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"status is 200\", () => pm.response.to.have.status(200));"
-                ]
+                "exec": ["pm.test(\"status is 200\", () => pm.response.to.have.status(200));"]
               }
             }
           ],
@@ -87,12 +77,8 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/documentation",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "documentation"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["documentation"]
             },
             "description": "QA-02 — human-facing docs page. Open in a browser for the interactive UI."
           }
@@ -135,15 +121,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/posts/{{postA}}/comments?limit=25",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "posts",
-                "{{postA}}",
-                "comments"
-              ],
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "posts", "{{postA}}", "comments"],
               "query": [
                 {
                   "key": "limit",
@@ -187,15 +166,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/posts/{{postA}}/comments?limit=1&cursor={{cursor}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "posts",
-                "{{postA}}",
-                "comments"
-              ],
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "posts", "{{postA}}", "comments"],
               "query": [
                 {
                   "key": "limit",
@@ -236,15 +208,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/posts/{{postB}}/comments",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "posts",
-                "{{postB}}",
-                "comments"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "posts", "{{postB}}", "comments"]
             },
             "description": "QA-18 — the headline isolation guarantee: another tenant's post is 404, never 403."
           }
@@ -275,15 +240,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/posts/11111111-1111-1111-1111-111111111111/comments",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "posts",
-                "11111111-1111-1111-1111-111111111111",
-                "comments"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "posts", "11111111-1111-1111-1111-111111111111", "comments"]
             },
             "description": "QA-20 — not visible in scope, resolved as 404 rather than 500."
           }
@@ -314,15 +272,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/posts/{{postA}}/comments?cursor=not-a-real-cursor",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "posts",
-                "{{postA}}",
-                "comments"
-              ],
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "posts", "{{postA}}", "comments"],
               "query": [
                 {
                   "key": "cursor",
@@ -359,15 +310,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/posts/{{postA}}/comments?limit=101",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "posts",
-                "{{postA}}",
-                "comments"
-              ],
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "posts", "{{postA}}", "comments"],
               "query": [
                 {
                   "key": "limit",
@@ -385,9 +329,7 @@
               "listen": "test",
               "script": {
                 "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"status is 200\", () => pm.response.to.have.status(200));"
-                ]
+                "exec": ["pm.test(\"status is 200\", () => pm.response.to.have.status(200));"]
               }
             }
           ],
@@ -401,15 +343,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/posts/{{postA}}/comments?bogus=1",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "posts",
-                "{{postA}}",
-                "comments"
-              ],
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "posts", "{{postA}}", "comments"],
               "query": [
                 {
                   "key": "bogus",
@@ -447,15 +382,8 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/v2/posts/{{postA}}/comments",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "posts",
-                "{{postA}}",
-                "comments"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "posts", "{{postA}}", "comments"]
             },
             "description": "QA-04 — no tenant context, request refused before any lookup."
           }
@@ -486,15 +414,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/posts/{{postA}}/comments",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "posts",
-                "{{postA}}",
-                "comments"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "posts", "{{postA}}", "comments"]
             },
             "description": "QA-05 — the header must be a UUID."
           }
@@ -548,15 +469,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "comments",
-                "{{commentId}}",
-                "replies"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "comments", "{{commentId}}", "replies"]
             },
             "body": {
               "mode": "raw",
@@ -611,15 +525,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "comments",
-                "{{commentId}}",
-                "replies"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "comments", "{{commentId}}", "replies"]
             },
             "body": {
               "mode": "raw",
@@ -665,15 +572,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "comments",
-                "{{commentId}}",
-                "replies"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "comments", "{{commentId}}", "replies"]
             },
             "body": {
               "mode": "raw",
@@ -721,15 +621,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "comments",
-                "{{commentId}}",
-                "replies"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "comments", "{{commentId}}", "replies"]
             },
             "body": {
               "mode": "raw",
@@ -773,15 +666,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "comments",
-                "{{commentId}}",
-                "replies"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "comments", "{{commentId}}", "replies"]
             },
             "body": {
               "mode": "raw",
@@ -829,15 +715,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/comments/99999999-9999-9999-9999-999999999999/replies",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "comments",
-                "99999999-9999-9999-9999-999999999999",
-                "replies"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "comments", "99999999-9999-9999-9999-999999999999", "replies"]
             },
             "body": {
               "mode": "raw",
@@ -885,15 +764,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "comments",
-                "{{commentId}}",
-                "replies"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "comments", "{{commentId}}", "replies"]
             },
             "body": {
               "mode": "raw",
@@ -919,9 +791,7 @@
               "listen": "prerequest",
               "script": {
                 "type": "text/javascript",
-                "exec": [
-                  "pm.collectionVariables.set(\"longBody\", \"a\".repeat(10001));"
-                ]
+                "exec": ["pm.collectionVariables.set(\"longBody\", \"a\".repeat(10001));"]
               }
             },
             {
@@ -955,15 +825,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "comments",
-                "{{commentId}}",
-                "replies"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "comments", "{{commentId}}", "replies"]
             },
             "body": {
               "mode": "raw",
@@ -984,9 +847,7 @@
               "listen": "prerequest",
               "script": {
                 "type": "text/javascript",
-                "exec": [
-                  "pm.collectionVariables.set(\"bigBody\", \"a\".repeat(70000));"
-                ]
+                "exec": ["pm.collectionVariables.set(\"bigBody\", \"a\".repeat(70000));"]
               }
             },
             {
@@ -1020,15 +881,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "comments",
-                "{{commentId}}",
-                "replies"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "comments", "{{commentId}}", "replies"]
             },
             "body": {
               "mode": "raw",
@@ -1076,15 +930,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "comments",
-                "{{commentId}}",
-                "replies"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "comments", "{{commentId}}", "replies"]
             },
             "body": {
               "mode": "raw",
@@ -1132,15 +979,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/comments/{{commentId}}/replies",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "comments",
-                "{{commentId}}",
-                "replies"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "comments", "{{commentId}}", "replies"]
             },
             "body": {
               "mode": "raw",
@@ -1180,13 +1020,8 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/v2/nope",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "v2",
-                "nope"
-              ]
+              "host": ["{{baseUrl}}"],
+              "path": ["v2", "nope"]
             },
             "description": "QA-36 — no route matched, distinct from a scoped-resource 404."
           }

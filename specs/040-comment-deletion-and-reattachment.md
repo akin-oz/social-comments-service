@@ -33,7 +33,7 @@ The snapshot never reconciles a disappearance. `upsertComment` (`src/repositorie
 - A-003: the provider is authoritative; the local store is a snapshot.
 - A-006: webhook ingestion, background synchronisation, and reconciliation are out of scope. There is no push signal for deletion; the only in-scope evidence a comment is gone is its absence from a **complete** provider read.
 - No provider in the capability matrix documents a deletion signal — several entries read "not stated" precisely because the vendor does not document the behaviour. Deletion is therefore inferred from absence, never reported. This spec does not invent a provider deletion flag.
-- Spec-013 and Spec-014 give a post `provider_exhausted` and `provider_completed_at`: together they record that a post's stream was read to its end at a known time. Spec-021 makes a bounded hydration a *partial* run — reaching the twenty-call budget is not reaching the end. A tombstone may only be inferred from a pass that is complete, never partial.
+- Spec-013 and Spec-014 give a post `provider_exhausted` and `provider_completed_at`: together they record that a post's stream was read to its end at a known time. Spec-021 makes a bounded hydration a _partial_ run — reaching the twenty-call budget is not reaching the end. A tombstone may only be inferred from a pass that is complete, never partial.
 - ADR-0013 assigns identity at persistence; ADR-0016 keeps `parentUnresolved` internal and states that a divergence between the two adapters is an adapter bug. Both precedents bind here.
 - No production data exists (Spec-018 context), so a nullable column is added without a backfill.
 
@@ -53,7 +53,7 @@ The snapshot never reconciles a disappearance. `upsertComment` (`src/repositorie
 
 **Does a deleted comment appear in a read?** Two answers, and the choice is the maintainer's:
 
-- **Option A — omit.** The list filters tombstoned rows. No response field changes. But a client holding a comment id — for instance from a reply operation — gets nothing back, and with no `GET /v2/comments/{id}` there is no endpoint that could show the tombstone; a `reply_operations.comment_id` then points at a comment no read returns. Under the `/v2` policy this removes no field, so it is schema-compatible; it changes *which* comments a list contains, which a snapshot list already does as pages shift.
+- **Option A — omit.** The list filters tombstoned rows. No response field changes. But a client holding a comment id — for instance from a reply operation — gets nothing back, and with no `GET /v2/comments/{id}` there is no endpoint that could show the tombstone; a `reply_operations.comment_id` then points at a comment no read returns. Under the `/v2` policy this removes no field, so it is schema-compatible; it changes _which_ comments a list contains, which a snapshot list already does as pages shift.
 - **Option B — marker.** The comment is returned carrying `deletedAt`/`status`. This is additive under the `/v2` compatibility policy — "Adding an optional field to a response" and "Adding a new member to an enum" are both permitted — and that policy already obliges clients to tolerate fields and enum members they do not recognise. Every client must then handle a comment marked deleted.
 
 **Does it need `/v3`?** Neither option requires it if done additively. It crosses the line only if an existing field is removed, renamed, or changed in meaning — for example blanking or nulling `body` for a deleted comment changes what `body` means, which the policy lists under "Requires `/v3`." This spec proposes the additive path and flags that boundary rather than crossing it.
@@ -72,7 +72,7 @@ Both adapters compute the tombstone and the reattachment marker identically. `sr
 
 - Webhook- or push-driven deletion and any real-time reconciliation (A-006).
 - **Surfacing the marker in the API response.** `src/api/schemas.ts` is deliberately not claimed here. Whether and how a deleted comment reaches a client is the contract decision below; Option A and an internal-only Option B land entirely within the claimed paths, while a client-facing marker needs a follow-up spec claiming the API layer.
-- Representing an *edited* comment, or un-deletion as a distinct lifecycle. Only deleted-versus-live is in scope.
+- Representing an _edited_ comment, or un-deletion as a distinct lifecycle. Only deleted-versus-live is in scope.
 - Adding `GET /v2/comments/{id}`.
 - Inferring deletion from a partial hydration or any single non-terminal page.
 - Resolving Instagram's reattachment by a provider round trip on the write path (ADR-0016 rejected that for the depth gate; the same reasoning holds). This spec only makes the divergence representable.
