@@ -167,7 +167,7 @@
               "string"
             ],
             "format": "date-time",
-            "description": "When this post was last read through to the end at the provider, or null if it never has been. Comments published since may not be present."
+            "description": "When this post was last read through to the end at the provider, or null if it never has been. Comments published since may not be present. IMPORTANT: if this is null on any page of a pagination run, the run is reading a snapshot that is still being filled, and the list you assemble from it may be missing comments. Discard the pages you have, drop your cursor, and start the run again from the first page — a later run reads a completed snapshot and returns the full list. Continuing to follow nextCursor is safe but yields a partial view: no duplicates and no gaps in what it returns, and no indication that anything is missing."
           }
         }
       },

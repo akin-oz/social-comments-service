@@ -191,7 +191,7 @@ A resource belonging to another tenant is `404`, not `403`: the caller is not to
 | `COMMENT_NOT_FOUND`      | `comment_not_found`             | List the post's comments first, then reply to an identifier from it. |
 | `IDEMPOTENCY_CONFLICT`   | `idempotency_key_body_mismatch` | Fix the caller. Reusing a key for a different body is a bug.         |
 | `IDEMPOTENCY_CONFLICT`   | `idempotency_key_in_flight`     | Retry **the same key** after a short delay.                          |
-| `IDEMPOTENCY_CONFLICT`   | `idempotency_key_failed`        | Retry with a **new key**. Nothing was published.                     |
+| `IDEMPOTENCY_CONFLICT`   | `idempotency_key_failed`        | Retry with a **new key**. Nothing was published. Legacy — see below. |
 | `REPLY_OUTCOME_UNKNOWN`  | `reply_outcome_unknown`         | **Do not retry.** Escalate — a reply may already exist.              |
 | `REPLY_DEPTH_EXCEEDED`   | `reply_depth_exceeded`          | Fix the request: reply to the top-level comment instead.             |
 | `UNSUPPORTED_CAPABILITY` | `capability_unsupported`        | Do not retry; this platform cannot do this.                          |
@@ -209,6 +209,10 @@ A resource belonging to another tenant is `404`, not `403`: the caller is not to
 `IDEMPOTENCY_CONFLICT` keeps one code across three situations on purpose: the code says what happened, the reason says what to do. Splitting it would break existing clients for no gain.
 
 `REPLY_OUTCOME_UNKNOWN` is deliberately a separate code (Spec-015). It means a reply may have been published and this service cannot establish whether it was — a timeout after send, a claim whose owning process died, or a publish that could not be recorded. Its action is the opposite of every other `409`. The service log names the provider's identifier for the reply that may exist, so an operator can check.
+
+`idempotency_key_failed` is no longer produced. It used to be the answer after a rate-limited reply, on the reading that a 429 proves the provider refused the request — and it asks the client to retry with a new key, which publishes a second reply if the 429 came from a limiter, a CDN, or a gateway _after_ the origin had already accepted. A rate-limited reply now records `unknown`, so the retry is answered `REPLY_OUTCOME_UNKNOWN` instead ([ADR-0015](decisions/0015-rate-limit-does-not-prove-refusal.md)). The reason stays in the vocabulary and stays documented because operations recorded by earlier versions still carry `failed`, and a client meeting one must still know what it means.
+
+A caller that receives `429 PROVIDER_RATE_LIMITED` on a reply should retry **the same idempotency key** after `Retry-After`, not a new one. Retrying the same key is safe: it is either resolved to the reply that exists or refused as unknown. A new key is the one thing that can duplicate.
 
 `REPLY_DEPTH_EXCEEDED` means the parent named by the request is itself a reply. This service exposes one level of replies as a deliberate normalisation, not because every platform enforces one (ADR-0014).
 
