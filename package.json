@@ -17,6 +17,7 @@
     "lint": "eslint . --max-warnings 0",
     "migrate": "tsx src/migrate.ts",
     "openapi": "tsx src/openapi.ts",
+    "prepare": "git config core.hooksPath .githooks || true",
     "seed": "tsx src/seed.ts",
     "start": "node dist/src/server.js",
     "test": "vitest run",

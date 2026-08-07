@@ -285,8 +285,17 @@ export function registerCommentRoutes(app: FastifyInstance, service: CommentServ
         .send(errorResponse(transport.code, transport.reason, transport.message, request.id));
     }
 
-    // A driver error carries detail, internalQuery, and constraint values that
-    // may quote row content. Only the shape is logged (ADR-0011).
+    // A driver error carries `detail`, `internalQuery`, and `constraint` values
+    // that may quote row content, so the error object is never handed to the
+    // serializer whole; those fields are what this list exists to leave out.
+    //
+    // The name, message, and stack are kept deliberately — an unhandled 500 is
+    // undiagnosable without them, and they are the operator's only account of
+    // what happened. So this is narrower than "only the shape": a message can
+    // still carry whatever a thrown Error chose to put in it. That is the
+    // accepted trade for a fault this severe, and it is why the driver's
+    // content-bearing fields are excluded rather than the whole record being
+    // trusted (ADR-0011).
     request.log.error(
       {
         event: 'http.request.failed',

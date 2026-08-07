@@ -124,6 +124,17 @@ function apiDocsEnabled(explicit: boolean | undefined): boolean {
   return process.env.NODE_ENV !== 'production';
 }
 
+/**
+ * How long a request may run before Fastify abandons it.
+ *
+ * Exported because the reply lease has to outlast it: a lease that expires
+ * while the request holding it is still running lets a second request take the
+ * claim over and publish a duplicate reply. That invariant used to rest on this
+ * number being hand-copied into a test, where nothing noticed if the two drifted
+ * apart (Spec-020).
+ */
+export const REQUEST_TIMEOUT_MS = 30_000;
+
 export function createApplication(dependencies: ApplicationDependencies = {}): FastifyInstance {
   const app = Fastify({
     logger:
@@ -152,7 +163,7 @@ export function createApplication(dependencies: ApplicationDependencies = {}): F
     requestIdHeader: false,
     genReqId: () => randomUUID(),
     // A request that outlives this is one the client has already abandoned.
-    requestTimeout: 30_000,
+    requestTimeout: REQUEST_TIMEOUT_MS,
     // The largest documented body is a 10,000-character reply. Fastify's
     // default is 1 MB, a hundredfold of parse work the contract never wanted.
     bodyLimit: 64 * 1024,

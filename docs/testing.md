@@ -44,6 +44,8 @@ The suite also ran with `passWithNoTests: true` and no floor, so a broken glob w
 
 The integration suites skip without a database so the default run needs no Docker. CI supplies both URLs, so nothing is skipped there — a suite that only ever skips is a suite that proves nothing.
 
+That last sentence used to be a warning with nothing behind it. Deleting the `env:` block from the CI workflow made every tenant-isolation test skip in silence while the build stayed green, and tenant isolation would then have been claimed by a suite that never checked it. `tests/suite-integrity.test.ts` now asserts that both URLs are present whenever `CI` is set, so the gate that makes local runs convenient cannot quietly disable the proof in the one environment where skipping is never legitimate.
+
 Some behaviour can only be observed against PostgreSQL: row-level security, the compare-and-set on snapshot state, the upsert's conflict clause, and every deletion rule. An in-memory version of those tests would pass for the wrong reason.
 
 ## One guard a test cannot kill, and why it stays

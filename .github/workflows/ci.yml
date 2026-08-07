@@ -6,6 +6,42 @@ on:
   pull_request:
 
 jobs:
+  # The commit rules were enforced only by a PreToolUse hook inside a Claude
+  # Code session: .git/hooks was empty, core.hooksPath unset, and CI read no
+  # messages. A commit typed in a terminal met no gate, which is how a commit
+  # with no Spec/ADR trailer reached main and broke the build. `prepare` now
+  # points core.hooksPath at .githooks for contributors; this is the half a
+  # contributor cannot switch off.
+  commits:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Check the message of every commit this push adds
+        run: |
+          set -euo pipefail
+          if [ '${{ github.event_name }}' = 'pull_request' ]; then
+            range='${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}'
+          elif [ '${{ github.event.before }}' = '0000000000000000000000000000000000000000' ]; then
+            # A newly created branch has no "before" to diff against; check its tip.
+            range='${{ github.sha }}~1..${{ github.sha }}'
+          else
+            range='${{ github.event.before }}..${{ github.sha }}'
+          fi
+          echo "checking $range"
+
+          failed=0
+          for sha in $(git rev-list --no-merges "$range"); do
+            if git log -1 --format=%B "$sha" | ./scripts/check-commit-message.sh -; then
+              echo "ok   $(git log -1 --format='%h %s' "$sha")"
+            else
+              echo "FAIL $(git log -1 --format='%h %s' "$sha")"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
   quality:
     runs-on: ubuntu-latest
     services:
@@ -64,3 +100,66 @@ jobs:
         run: |
           pnpm openapi
           git diff --exit-code docs/openapi.json
+      - name: Build the artefact the container actually runs
+        # `pnpm test` runs TypeScript through vitest and `pnpm typecheck` emits
+        # nothing, so until this step existed the pipeline never produced
+        # dist/src/server.js — the exact file the Dockerfile's CMD launches.
+        # A build-only break (a bad tsconfig include, an import unresolvable
+        # once emitted) reached the image without CI having compiled it once.
+        run: |
+          pnpm build
+          test -f dist/src/server.js
+          test -f dist/src/migrate.js
+          test -f dist/src/seed.js
+
+  # Both required entry points in the README are pnpm and Docker. Only the first
+  # was ever exercised; the Dockerfile and compose file were correct by hand
+  # review alone. That is the gap most likely to reintroduce the
+  # "built one path, verified another" defect this project's history records,
+  # so the container path now runs end to end on every push.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the image
+        # Standalone, because this is how the image is actually produced for
+        # the deployment — Fly builds the Dockerfile, it does not run compose.
+        # The compose build below reuses these layers from cache.
+        run: docker build -t comments-service:ci .
+      - name: Bring the documented stack up
+        # The same command a reviewer is told to run. `--wait` blocks on the
+        # healthchecks and the one-shot migrate step, so a broken ordering or a
+        # runtime stage missing a file it reads fails here rather than in a
+        # reviewer's terminal.
+        run: docker compose up --build --wait --wait-timeout 180
+      - name: Exercise the service through the container
+        # A container that boots proves less than one that answers. This walks
+        # the same requests the README documents, against the seeded tenants.
+        run: |
+          set -euo pipefail
+          account='2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b001'
+          post='2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b002'
+
+          curl -fsS --retry 10 --retry-connrefused --retry-delay 2 \
+            http://localhost:3000/health
+
+          # Reads go through PostgreSQL here, as the least-privileged role, so a
+          # 200 with items is also evidence the row-level policies admit the
+          # tenant that owns the rows rather than blocking everyone.
+          body=$(curl -fsS "http://localhost:3000/v2/posts/$post/comments?limit=2" \
+            -H "X-Account-Id: $account")
+          echo "$body"
+          echo "$body" | grep -q '"data"'
+
+          # The other tenant's post must not be readable with this account.
+          # 404 rather than 403: the contract does not confirm the post exists.
+          http_status=$(curl -s -o /dev/null -w '%{http_code}' \
+            "http://localhost:3000/v2/posts/7c3d9e10-4a5b-4c6d-8e9f-01a2b3c4d006/comments" \
+            -H "X-Account-Id: $account")
+          test "$http_status" = '404'
+      - name: Show the service log if anything above failed
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Tear the stack down
+        if: always()
+        run: docker compose down --volumes

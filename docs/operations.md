@@ -156,7 +156,7 @@ Migrations run once per release from a single runner, never on API startup, so r
 
 ## Data and security
 
-The application establishes `app.account_id` from trusted authentication context inside the database transaction. RLS policies fail closed when that setting is absent. Tokens are referenced, not stored, in this service schema. Logs must not contain credentials or full comment bodies unless explicitly needed for a controlled incident.
+The application establishes `app.account_id` from trusted authentication context inside the database transaction. RLS policies fail closed when that setting is absent — pinned by a test that connects as the service role without going through `withTenant` and asserts all five tenant-scoped tables return zero rows, which is what distinguishes "the default is deny" from "no policy has been tested with the setting missing". Tokens are referenced, not stored, in this service schema. Logs must not contain credentials or full comment bodies unless explicitly needed for a controlled incident.
 
 Retention and deletion automation are not selected yet and must be decided before production data retention is enabled.
 

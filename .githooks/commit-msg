@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+# Activated by the `prepare` script in package.json, which points
+# core.hooksPath at this directory after `pnpm install`. CI re-checks the same
+# rule, because a hook is advice a contributor can turn off and a required
+# check is not.
+exec ./scripts/check-commit-message.sh "$1"
