@@ -37,11 +37,13 @@ primary_region = "ams"
 [http_service]
   internal_port = 3000
   force_https = true
-  # Scale to zero between requests: cheap for a demo, wakes in a second or two.
-  # Set min_machines_running = 1 if you would rather keep it warm for a reviewer.
-  auto_stop_machines = "stop"
+  # Kept warm: one machine always running, so a reviewer never meets a cold
+  # start (Fly's edge returns "proxy having trouble reaching app" during the
+  # ~1s boot of a scaled-to-zero machine). To save ~$3/mo after the review,
+  # set auto_stop_machines = "stop" and min_machines_running = 0.
+  auto_stop_machines = "off"
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
   # /health needs no account context and touches no database, so it is a pure
   # liveness check. To confirm database connectivity, curl a /v2 endpoint.
