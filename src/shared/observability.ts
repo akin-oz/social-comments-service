@@ -108,11 +108,20 @@ export async function callProvider<T>(
 
 function retryDelayFor(error: unknown, attempt: number, policy: RetryPolicy): number | null {
   if (attempt >= policy.maxAttempts) return null;
+  // `shouldRetry` decides *whether* to replay; the branches below decide only
+  // *when*. That order matters and used to be the other way round: the
+  // rate-limit branch answered first, so the write policy's
+  // `shouldRetry: () => false` was unreachable for a 429 and a publish was
+  // replayed three times — the exact duplication this policy split exists to
+  // prevent (Spec-026, ADR-0015).
+  if (!policy.shouldRetry(error)) return null;
   if (error instanceof ProviderRateLimitError) {
+    // The provider's own guidance wins when it fits the budget. Guidance beyond
+    // the budget is surfaced to the caller rather than slept off.
     if (error.retryAfterMs === null) return backoffDelay(attempt, policy);
     return error.retryAfterMs <= policy.maxDelayMs ? error.retryAfterMs : null;
   }
-  return policy.shouldRetry(error) ? backoffDelay(attempt, policy) : null;
+  return backoffDelay(attempt, policy);
 }
 
 function backoffDelay(attempt: number, policy: RetryPolicy): number {
@@ -140,6 +149,13 @@ export const providerRetryPolicy: RetryPolicy = {
   timeoutMs: 20_000,
   shouldRetry: (error) => {
     if (error instanceof ProviderUnavailableError) return true;
+    // A rate limit is retriable *for a read*, which is why this is stated here
+    // rather than assumed by the delay logic. Refetching a page converges on
+    // the same rows through the upsert, so replaying one costs a provider call
+    // and nothing else. The write policy overrides this to false, and since
+    // `retryDelayFor` now consults `shouldRetry` first, that override is what
+    // actually decides a 429 on the reply path (Spec-026).
+    if (error instanceof ProviderRateLimitError) return true;
     // Never replay a request the provider already rejected on its merits.
     if (error instanceof ServiceError) return false;
     return false;
@@ -161,9 +177,20 @@ export interface ProviderRetryPolicies {
 }
 
 /**
- * Pairs a read policy with a write policy that never replays an ambiguous
- * failure. Rate limits are still retried, because a rate-limited call is one
- * the provider refused: refusal is proof the request was not accepted.
+ * Pairs a read policy with a write policy that replays nothing at all.
+ *
+ * This used to carve out rate limits, on the premise that "a rate-limited call
+ * is one the provider refused, and refusal is proof the request was not
+ * accepted." That premise is true of a 429 raised by the write handler and
+ * false of a 429 raised by anything in front of it — Meta's limiter, a CDN, a
+ * gateway refusing on its own retry budget — which can return 429 *after* the
+ * origin accepted and published. The service cannot tell the two apart from the
+ * status code, so it no longer guesses (ADR-0015).
+ *
+ * The carve-out was also unreachable in the direction that mattered: because
+ * `retryDelayFor` consulted the rate-limit branch before `shouldRetry`, this
+ * `() => false` never ran for a 429, and a publish was replayed up to three
+ * times. Both halves are fixed; this one is the statement of intent.
  */
 export function providerPolicies(read: RetryPolicy): ProviderRetryPolicies {
   return { read, write: { ...read, shouldRetry: () => false } };
