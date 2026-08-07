@@ -1,0 +1,57 @@
+# Fly.io deploy config for the comment service. `fly deploy` reads this.
+#
+# The database is deliberately NOT Fly Managed Postgres: that offering has no
+# superuser and no raw `CREATE ROLE`, so migration 002 (which creates the
+# least-privileged `comments_app` role) and seed (which writes reference tenants
+# under FORCE ROW LEVEL SECURITY, needing an RLS-bypassing role) would both
+# fail. Unmanaged Fly Postgres gives a `postgres` superuser — a 1:1 match for
+# the docker-compose.yml used locally, so migrate + seed + RLS run unchanged.
+#
+# One-time setup (ADR-0009: one migration runner per release, never on API boot):
+#
+#   fly postgres create --name social-comments-db --region ams \
+#     --initial-cluster-size 1 --vm-size shared-cpu-1x --volume-size 1
+#   fly proxy 15432:5432 -a social-comments-db &          # tunnel to the primary
+#   # create the database, then migrate + seed as the superuser:
+#   DATABASE_URL=postgres://postgres:<superpw>@localhost:15432/comments \
+#     APP_DATABASE_PASSWORD=<app-pw> pnpm migrate && pnpm seed
+#   # the app connects as comments_app (non-superuser → RLS enforced), never postgres:
+#   fly secrets set \
+#     DATABASE_URL=postgres://comments_app:<app-pw>@social-comments-db.flycast:5432/comments \
+#     IDEMPOTENCY_FINGERPRINT_SECRET=$(openssl rand -hex 32) -a social-comments-service
+#   fly deploy -a social-comments-service --ha=false
+#   fly certs add comments.akinoztorun.dev -a social-comments-service   # then add the A/AAAA records
+app = "social-comments-service"
+primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Non-secret runtime configuration. NODE_ENV=production is set by the image,
+# which is what arms the fail-closed startup guard — leave it.
+[env]
+  PORT = "3000"
+  ENABLE_API_DOCS = "true"
+  LOG_LEVEL = "info"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # Scale to zero between requests: cheap for a demo, wakes in a second or two.
+  # Set min_machines_running = 1 if you would rather keep it warm for a reviewer.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  # /health needs no account context and touches no database, so it is a pure
+  # liveness check. To confirm database connectivity, curl a /v2 endpoint.
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health"
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
