@@ -88,9 +88,10 @@ Dependencies point inward: `api` and `repositories` depend on `comments`, never 
 
 ## Development workflow
 
-Prerequisites: Node.js 22 or newer, and pnpm 11.18 (the version this repository pins; `corepack enable` picks it up from `packageManager`). The reply example below also uses `jq`.
+Prerequisites: Node.js 22 or newer, and pnpm 11.18. This repository pins the exact pnpm version in `packageManager`, so the simplest way in is Corepack, which reads that field. The reply example below also uses `jq`.
 
 ```bash
+corepack enable   # activates the pinned pnpm; skip if you already have pnpm 11.18
 pnpm install
 pnpm typecheck
 pnpm lint
@@ -120,6 +121,8 @@ pnpm dev
 ```
 
 In-memory repositories and the fixture provider, so no database is needed. The comment snapshot starts empty either way, so the first read exercises provider-backed hydration rather than seeded data.
+
+To run the compiled artifact directly instead of the watch-mode dev server — the same entry point the container image runs — build first and then start it: `pnpm build && pnpm start`. Without `DATABASE_URL` it serves the same in-memory demo as `pnpm dev`; with `DATABASE_URL` set it runs on PostgreSQL.
 
 ```bash
 curl 'http://localhost:3000/v2/posts/2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b002/comments?limit=2' -H 'X-Account-Id: 2b1f8f5c-0d2e-4d64-9d5f-91a0c0f1b001'
