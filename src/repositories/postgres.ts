@@ -1,7 +1,7 @@
 import { ServiceError } from '../shared/errors.js';
 import { assertStoredComment, assertStoredReplyOperation } from '../shared/validation.js';
 import { isIssuedTimestamp, isUuid } from '../shared/identifiers.js';
-import type { Database, SqlSession } from './database.js';
+import type { Database } from './database.js';
 import type {
   Comment,
   ObservedComment,
@@ -308,8 +308,67 @@ export class PostgresCommentRepository implements CommentRepository {
     observed: readonly ObservedComment[],
   ): Promise<readonly Comment[]> {
     if (observed.length === 0) return [];
+    // De-duplicate by external id, keeping the last occurrence: a newest-first
+    // provider can repeat a comment across a page boundary, and a single
+    // `ON CONFLICT DO UPDATE` cannot touch one conflict key twice — it aborts the
+    // command with cardinality_violation. Keep-last matches the row-by-row
+    // `do update set body = excluded.body` this replaces and the in-memory
+    // last-write-wins store (Spec-037). A Map keyed on externalId overwrites the
+    // value on a repeat while holding first-seen order.
+    const deduped = [...new Map(observed.map((item) => [item.externalId, item])).values()];
     return this.db.withTenant(context.accountId, async (tx) => {
-      for (const item of observed) await upsertComment(tx, context, item);
+      // One multi-row insert for the whole page, joining each row to its post the
+      // same way the single-row insert did, in place of up to 100 sequential
+      // round trips. The conflict clause is unchanged, column for column: the
+      // body is still overwritten on conflict because hydration reconciles with
+      // the provider (Spec-027), while identity and ownership columns are left
+      // untouched.
+      const stored = await tx.query<{ id: string }>(
+        `insert into comments
+           (account_id, post_id, social_account_id, external_comment_id,
+            external_parent_comment_id, author_external_id, author_display_name,
+            body, published_at, updated_at)
+         select $1, p.id, p.social_account_id,
+                v.external_comment_id, v.external_parent_comment_id,
+                v.author_external_id, v.author_display_name, v.body,
+                v.published_at, v.updated_at
+         from unnest(
+                $2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
+                $7::timestamptz[], $8::timestamptz[], $9::uuid[]
+              ) as v(external_comment_id, external_parent_comment_id,
+                     author_external_id, author_display_name, body,
+                     published_at, updated_at, post_id)
+         join posts p on p.id = v.post_id and p.account_id = $1
+         on conflict (social_account_id, external_comment_id) do update set
+           body = excluded.body,
+           author_display_name = excluded.author_display_name,
+           external_parent_comment_id = excluded.external_parent_comment_id,
+           updated_at = excluded.updated_at,
+           last_seen_at = now()
+         returning id`,
+        [
+          context.accountId,
+          deduped.map((item) => item.externalId),
+          deduped.map((item) => item.externalParentCommentId),
+          deduped.map((item) => item.author.id),
+          deduped.map((item) => item.author.displayName),
+          deduped.map((item) => item.body),
+          deduped.map((item) => item.publishedAt),
+          deduped.map((item) => item.updatedAt),
+          deduped.map((item) => item.postId),
+        ],
+      );
+      // With `DO UPDATE`, every distinct key whose post exists returns a row, so
+      // a shortfall means at least one post is not the tenant's — the error the
+      // row-by-row loop raised per row. Throwing here rolls the whole call back.
+      if (stored.rows.length < deduped.length) {
+        throw new ServiceError(
+          'POST_NOT_FOUND',
+          'post_not_found',
+          'The comment post was not found.',
+          404,
+        );
+      }
       // Read back after the whole batch is stored, so a reply that arrives
       // alongside its parent resolves against it, and so the identities are
       // the ones the database assigned rather than any the caller supplied.
@@ -328,7 +387,7 @@ export class PostgresCommentRepository implements CommentRepository {
              select target.social_account_id from posts target
              where target.id = $3 and target.account_id = $1
            )`,
-        [context.accountId, observed.map((item) => item.externalId), observed[0]!.postId],
+        [context.accountId, deduped.map((item) => item.externalId), deduped[0]!.postId],
       );
       return result.rows.map(toComment);
     });
@@ -413,49 +472,6 @@ export class PostgresCommentRepository implements CommentRepository {
         500,
       );
     });
-  }
-}
-
-async function upsertComment(
-  tx: SqlSession,
-  context: TenantContext,
-  observed: ObservedComment,
-): Promise<void> {
-  // No identity is supplied: the column defaults to gen_random_uuid(), so two
-  // tenants observing the same provider comment get two rows (ADR-0013).
-  const result = await tx.query<{ id: string }>(
-    `insert into comments
-       (account_id, post_id, social_account_id, external_comment_id,
-        external_parent_comment_id, author_external_id, author_display_name,
-        body, published_at, updated_at)
-     select $1, p.id, p.social_account_id, $2, $3, $4, $5, $6, $7, $8
-     from posts p where p.id = $9 and p.account_id = $1
-     on conflict (social_account_id, external_comment_id) do update set
-       body = excluded.body,
-       author_display_name = excluded.author_display_name,
-       external_parent_comment_id = excluded.external_parent_comment_id,
-       updated_at = excluded.updated_at,
-       last_seen_at = now()
-     returning id`,
-    [
-      context.accountId,
-      observed.externalId,
-      observed.externalParentCommentId,
-      observed.author.id,
-      observed.author.displayName,
-      observed.body,
-      observed.publishedAt,
-      observed.updatedAt,
-      observed.postId,
-    ],
-  );
-  if (!result.rows[0]) {
-    throw new ServiceError(
-      'POST_NOT_FOUND',
-      'post_not_found',
-      'The comment post was not found.',
-      404,
-    );
   }
 }
 

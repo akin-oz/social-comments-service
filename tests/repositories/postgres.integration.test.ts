@@ -898,6 +898,28 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
     });
   });
 
+  it('stores one row for a page that repeats an external id, keeping the last body', async () => {
+    // A newest-first provider can return the same comment twice at a page
+    // boundary. The set-based upsert (Spec-037) sends the page in one
+    // `ON CONFLICT DO UPDATE`, which aborts with cardinality_violation if a key
+    // appears twice — so the batch must be de-duplicated first, keeping the last
+    // occurrence to match the row-by-row `do update set body = excluded.body`
+    // this replaced.
+    const externalId = `dup-${crypto.randomUUID()}`;
+    const stored = await comments.upsertMany(contextA, [
+      { ...comment(tenantA, externalId, '2026-08-01T16:00:00.000Z'), body: 'first observation' },
+      { ...comment(tenantA, externalId, '2026-08-01T16:00:00.000Z'), body: 'second observation' },
+    ]);
+
+    // It resolves (does not raise) and stores exactly one row for the key.
+    expect(stored).toHaveLength(1);
+    // The surviving row is the last occurrence, durable under findById since the
+    // returned array's cardinality is unspecified by contract.
+    await expect(comments.findById(contextA, stored[0]!.id)).resolves.toMatchObject({
+      body: 'second observation',
+    });
+  });
+
   it('keeps one platform comments out of another platform query', async () => {
     // Every fixture used to be `instagram`, so the platform predicate in both
     // adapters could be neutralised without a single test noticing.
@@ -1212,16 +1234,18 @@ describe.skipIf(!enabled)('PostgreSQL persistence and tenant isolation', () => {
   });
 
   it('rolls a failed batch back rather than committing its prefix', async () => {
-    // Replacing `rollback` with `commit` in withTenant survived the suite. A
-    // mid-batch upsert failure would then leave the rows written before the
-    // failure permanently stored (Spec-020).
+    // Replacing `rollback` with `commit` in withTenant survived the suite. The
+    // batch's good row is stored by the insert before the count-check rejects
+    // the batch, so on commit-instead-of-rollback that row would persist
+    // (Spec-020, Spec-037).
     const good = `rollback-good-${crypto.randomUUID()}`;
 
     await expect(
       comments.upsertMany(contextA, [
         comment(tenantA, good, '2026-08-01T19:00:00.000Z'),
-        // Second item names another tenant's post: the insert selects no post
-        // row for this account, so upsertComment throws mid-batch.
+        // Second item names another tenant's post: the multi-row insert stores
+        // no row for it, so the returned-row count falls short of the batch and
+        // upsertMany rejects, rolling the good row back with it (Spec-037).
         { ...comment(tenantB, `rollback-bad-${crypto.randomUUID()}`, '2026-08-01T19:01:00.000Z') },
       ]),
     ).rejects.toThrow();
